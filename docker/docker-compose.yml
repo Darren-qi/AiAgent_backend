@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  # =============================================
+  # FastAPI 应用
+  # =============================================
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: development
+    container_name: ai-agent-backend
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - ..:/app
+    environment:
+      - ENVIRONMENT=development
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/ai_agent
+      - DATABASE_URL_SYNC=postgresql://postgres:postgres@db:5432/ai_agent
+      - REDIS_URL=redis://redis:6379/0
+      - LOG_LEVEL=DEBUG
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # =============================================
+  # PostgreSQL 数据库
+  # =============================================
+  db:
+    image: postgres:15-alpine
+    container_name: ai-agent-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # =============================================
+  # Redis 缓存
+  # =============================================
+  redis:
+    image: redis:7-alpine
+    container_name: ai-agent-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # =============================================
+  # 生产环境配置
+  # =============================================
+  app-prod:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: production
+    container_name: ai-agent-backend-prod
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/ai_agent
+      - DATABASE_URL_SYNC=postgresql://postgres:postgres@db:5432/ai_agent
+      - REDIS_URL=redis://redis:6379/0
+      - LOG_LEVEL=INFO
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in production}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - backend
+    restart: always
+    profiles:
+      - production
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
