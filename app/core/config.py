@@ -2,7 +2,7 @@
 Pydantic 配置模块
 
 定义应用配置，支持开发和生产两套配置。
-使用 pydantic-settings 自动从环境变量加载配置。
+核心变量从根目录 config.py 加载，其余使用默认值。
 """
 
 from functools import lru_cache
@@ -11,20 +11,24 @@ from typing import List
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+import config as dev_config
+
+
+def _build_database_url(db: dict, async_driver: bool = True) -> str:
+    """构建数据库连接 URL"""
+    driver = "postgresql+asyncpg" if async_driver else "postgresql"
+    return f"{driver}://{db['user']}:{db['password']}@{db['host']}:{db['port']}/{db['name']}"
+
 
 class Settings(BaseSettings):
     """
     应用配置类
 
-    支持从环境变量或 .env 文件加载配置。
-    开发和生产环境使用相同的配置结构，通过环境变量区分。
+    核心变量从根目录 config.py 加载，其余使用默认值。
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",               # 从 .env 文件加载环境变量
-        env_file_encoding="utf-8",     # 指定 .env 文件编码
-        case_sensitive=False,          # 环境变量不区分大小写
-        extra="ignore",                # 忽略额外字段
+        extra="ignore",  # 忽略额外字段
     )
 
     # =========================================
@@ -69,13 +73,13 @@ class Settings(BaseSettings):
     # =========================================
     # 异步数据库连接（用于 FastAPI 异步操作）
     database_url: str = Field(
-        default="postgresql+asyncpg://user:password@localhost:5432/ai_agent",
+        default=_build_database_url(dev_config.database, async_driver=True),
         description="异步数据库连接URL"
     )
 
     # 同步数据库连接（用于 Alembic 迁移）
     database_url_sync: str = Field(
-        default="postgresql://user:password@localhost:5432/ai_agent",
+        default=_build_database_url(dev_config.database, async_driver=False),
         description="同步数据库连接URL"
     )
 
@@ -92,12 +96,26 @@ class Settings(BaseSettings):
     # =========================================
     # JWT 认证配置
     # =========================================
-    secret_key: str = Field(default="your-secret-key-change-in-production", description="JWT签名密钥")
-    algorithm: str = Field(default="HS256", description="JWT加密算法")
+    secret_key: str = Field(
+        default=dev_config.secret_key,
+        description="JWT签名密钥"
+    )
+    algorithm: str = Field(
+        default=dev_config.algorithm,
+        description="JWT加密算法"
+    )
 
     # Token 过期时间
-    access_token_expire_minutes: int = Field(default=30, ge=1, description="访问令牌过期时间(分钟)")
-    refresh_token_expire_days: int = Field(default=7, ge=1, description="刷新令牌过期时间(天)")
+    access_token_expire_minutes: int = Field(
+        default=dev_config.access_token_expire_minutes,
+        ge=1,
+        description="访问令牌过期时间(分钟)"
+    )
+    refresh_token_expire_days: int = Field(
+        default=dev_config.refresh_token_expire_days,
+        ge=1,
+        description="刷新令牌过期时间(天)"
+    )
 
     # =========================================
     # 邮件配置（可选功能）

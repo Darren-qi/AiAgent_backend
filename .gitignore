@@ -31,6 +31,9 @@ env/
 .env.local
 .env.*.local
 
+# Developer config (contains sensitive info)
+config.py
+
 # IDE
 .idea/
 .vscode/
