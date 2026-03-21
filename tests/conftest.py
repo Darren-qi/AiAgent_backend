@@ -1,141 +1,70 @@
-"""
-Pytest 配置文件
-
-定义测试使用的 fixtures 和配置。
-"""
-
-import asyncio
-from typing import AsyncGenerator, Generator
+"""Test fixtures and configuration."""
 
 import pytest
-import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.pool import NullPool
-
-from app.main import app
-from app.db.session import get_db
-from app.db.base import Base
-from app.core.security import hash_password
-from app.models.user import User, UserRole, UserStatus
-
-
-# =============================================
-# 数据库配置
-# =============================================
-
-# 测试数据库 URL（使用 SQLite 内存数据库便于测试）
-TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+import asyncio
+from typing import Generator, AsyncGenerator
+from unittest.mock import MagicMock, AsyncMock
 
 
 @pytest.fixture(scope="session")
-def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
-    """创建事件循环 fixture"""
+def event_loop():
+    """创建事件循环"""
     loop = asyncio.get_event_loop_policy().new_event_loop()
     yield loop
     loop.close()
 
 
-@pytest_asyncio.fixture(scope="function")
-async def db_engine():
-    """创建测试数据库引擎"""
-    engine = create_async_engine(
-        TEST_DATABASE_URL,
-        echo=False,
-        poolclass=NullPool,
-    )
-
-    # 创建所有表
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    yield engine
-
-    # 清理
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-
-    await engine.dispose()
+@pytest.fixture
+def mock_settings():
+    """Mock settings fixture"""
+    settings = MagicMock()
+    settings.app_name = "AiAgent Test"
+    settings.debug = True
+    settings.database_url = "postgresql+asyncpg://test:test@localhost:5432/test_db"
+    settings.redis_url = "redis://localhost:6379/0"
+    settings.secret_key = "test-secret-key"
+    return settings
 
 
-@pytest_asyncio.fixture(scope="function")
-async def db_session(db_engine) -> AsyncGenerator[AsyncSession, None]:
-    """创建测试数据库会话"""
-    async_session = async_sessionmaker(
-        bind=db_engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-        autoflush=False,
-        autocommit=False,
-    )
-
-    async with async_session() as session:
-        yield session
-        await session.rollback()
+@pytest.fixture
+def mock_user():
+    """Mock user fixture"""
+    return {
+        "user_id": "test-user-123",
+        "username": "testuser",
+        "email": "test@example.com",
+        "role": "user",
+    }
 
 
-# =============================================
-# 依赖注入覆盖
-# =============================================
-
-@pytest_asyncio.fixture(scope="function")
-async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
-    """创建测试客户端"""
-
-    async def override_get_db():
-        yield db_session
-
-    app.dependency_overrides[get_db] = override_get_db
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
-
-    app.dependency_overrides.clear()
+@pytest.fixture
+def mock_agent_context():
+    """Mock agent context fixture"""
+    return {
+        "session_id": "test-session-123",
+        "user_id": "test-user-123",
+        "request_id": "test-request-456",
+        "timestamp": "2026-03-21T10:00:00Z",
+    }
 
 
-# =============================================
-# 测试用户 fixtures
-# =============================================
-
-@pytest_asyncio.fixture
-async def test_user(db_session: AsyncSession) -> User:
-    """创建测试用户"""
-    user = User(
-        username="testuser",
-        email="test@example.com",
-        hashed_password=hash_password("password123"),
-        nickname="Test User",
-        role=UserRole.USER,
-        status=UserStatus.ACTIVE,
-    )
-    db_session.add(user)
-    await db_session.commit()
-    await db_session.refresh(user)
-    return user
+@pytest.fixture
+def mock_skill_result():
+    """Mock skill result fixture"""
+    return {
+        "success": True,
+        "result": {"message": "Skill executed successfully"},
+        "skill_name": "test_skill",
+        "execution_time": 0.5,
+    }
 
 
-@pytest_asyncio.fixture
-async def admin_user(db_session: AsyncSession) -> User:
-    """创建管理员用户"""
-    user = User(
-        username="admin",
-        email="admin@example.com",
-        hashed_password=hash_password("admin123"),
-        nickname="Admin User",
-        role=UserRole.ADMIN,
-        status=UserStatus.ACTIVE,
-    )
-    db_session.add(user)
-    await db_session.commit()
-    await db_session.refresh(user)
-    return user
-
-
-# =============================================
-# 认证辅助函数
-# =============================================
-
-def get_auth_headers(token: str) -> dict:
-    """生成认证请求头"""
-    return {"Authorization": f"Bearer {token}"}
+@pytest.fixture
+def mock_storage_result():
+    """Mock storage result fixture"""
+    return {
+        "success": True,
+        "url": "https://storage.example.com/test-file.jpg",
+        "file_id": "file-123",
+        "size": 1024,
+    }

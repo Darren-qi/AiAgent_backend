@@ -1,8 +1,4 @@
-"""
-Alembic 配置文件
-
-此模块是 Alembic 迁移系统的配置入口点。
-"""
+"""Alembic environment configuration."""
 
 import asyncio
 from logging.config import fileConfig
@@ -13,32 +9,28 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 
-# 导入配置和模型
-from app.core.config import get_settings
-from app.db.base import Base
-from app.models import *  # noqa: F401, F403
+import sys
+import os
 
-# Alembic Config 对象
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from app.models.base import Base
+from app.models.user import User
+from app.models.experience import ExperienceModel, SessionModel, TaskModel
+from app.core.config import settings
+
 config = context.config
 
-# 设置数据库 URL
-settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.database_url_sync)
-
-# 配置日志
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# 目标元数据（用于自动生成迁移）
 target_metadata = Base.metadata
+
+config.set_main_option("sqlalchemy.url", settings.database_url)
 
 
 def run_migrations_offline() -> None:
-    """
-    以离线模式运行迁移
-
-    生成 SQL 脚本而不是连接到数据库。
-    """
+    """Run migrations in 'offline' mode."""
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
@@ -52,11 +44,6 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    """
-    运行迁移
-
-    使用现有数据库连接。
-    """
     context.configure(connection=connection, target_metadata=target_metadata)
 
     with context.begin_transaction():
@@ -64,11 +51,7 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    """
-    异步运行迁移
-
-    创建异步引擎并运行迁移。
-    """
+    """Run migrations in 'online' mode with async engine."""
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
@@ -82,11 +65,7 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
-    """
-    以在线模式运行迁移
-
-    连接到数据库并运行迁移。
-    """
+    """Run migrations in 'online' mode."""
     asyncio.run(run_async_migrations())
 
 

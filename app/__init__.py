@@ -1,9 +1,7 @@
 """
-App 模块 __init__.py
-
-FastAPI 应用包初始化。
+AiAgent 应用模块
 """
 
-from app.main import app, create_app
+from app.main import create_app
 
-__all__ = ["app", "create_app"]
+__all__ = ["create_app"]

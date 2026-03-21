@@ -8,6 +8,7 @@ Models 模块 __init__.py
 from app.db.base import Base, IDMixin, TimestampMixin, SoftDeleteMixin
 from app.models.user import User, UserRole, UserStatus
 from app.models.post import Post, PostStatus, PostVisibility
+from app.models.experience import ExperienceModel, SessionModel, TaskModel
 
 __all__ = [
     # Base
@@ -23,4 +24,8 @@ __all__ = [
     "Post",
     "PostStatus",
     "PostVisibility",
+    # Experience
+    "ExperienceModel",
+    "SessionModel",
+    "TaskModel",
 ]

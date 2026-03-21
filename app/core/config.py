@@ -135,7 +135,10 @@ class Settings(BaseSettings):
     # 日志配置
     # =========================================
     log_level: str = Field(default="INFO", description="日志级别")
-    log_file_path: str = Field(default="logs/app.log", description="日志文件路径")
+    log_file_path: str = Field(
+        default="../logs/app.log",
+        description="日志文件路径（相对于 backend 目录）"
+    )
 
     # =========================================
     # 配置验证
