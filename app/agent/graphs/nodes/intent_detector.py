@@ -1,10 +1,15 @@
-"""意图检测节点 - LLM 语义理解 + 关键词兜底"""
+"""意图检测节点 - LLM 语义理解 + 关键词兜底
+
+简化版：移除复杂度评估逻辑，统一使用相同的执行配置。
+所有任务都使用完整能力（迭代、重规划、并行、Supervisor检查）。
+"""
 
 import json
 import re
 import logging
 from typing import Dict, Any, List, Optional
-import re
+import re as regex_module
+
 from app.agent.llm.factory import LLMFactory
 
 logger = logging.getLogger(__name__)
@@ -47,21 +52,12 @@ INTENT_TYPES = {
 }
 
 
-# 复杂度指标关键词
-COMPLEXITY_HIGH_KEYWORDS = [
-    "多个", "复杂", "详细", "全面", "系统", "架构", "设计", "比较",
-    "详细分析", "完整", "综合", "深入", "批量", "大量",
-    "compare", "complex", "multiple", "batch", "systematic"
-]
-
-COMPLEXITY_MEDIUM_KEYWORDS = [
-    "一些", "部分", "几个", "整理", "整理一下", "处理",
-    "some", "several", "process", "organize"
-]
-
-
 class IntentDetector:
-    """意图检测器 - LLM 语义理解 + 关键词匹配兜底"""
+    """意图检测器 - LLM 语义理解 + 关键词匹配兜底
+
+    简化版：只进行意图检测，不再评估复杂度。
+    所有任务统一使用相同的执行配置。
+    """
 
     # LLM 意图识别 Prompt
     INTENT_PROMPT = """你是一个专业的用户意图识别助手。请分析用户任务的意图类型。
@@ -95,40 +91,6 @@ class IntentDetector:
 }
 
 请分析以下用户任务："""
-
-    # 复杂度评估 Prompt
-    COMPLEXITY_PROMPT = """你是一个任务复杂度评估专家。请评估以下任务的复杂度。
-
-## 复杂度等级定义：
-- **low**: 单一步骤、简单任务，1-2步可完成
-- **medium**: 多步骤、需要规划，3-5步可完成
-- **high**: 复杂任务、需要多智能体协作、5步以上或需要并行处理
-
-## 输出要求：
-请以 JSON 格式返回评估结果：
-- **complexity**: low/medium/high
-- **estimated_steps**: 预估执行步骤数
-- **reasoning**: 评估理由
-- **routing**: 路由建议
-  - mode: simple(单Agent直接执行)/dynamic_subgraph(动态子图并行)/multi_agent(多智能体协作)
-  - parallel: 是否支持并行执行
-  - max_iterations: 最大迭代次数
-- **requires**: 需要的资源/能力
-
-示例：
-{
-    "complexity": "medium",
-    "estimated_steps": 4,
-    "reasoning": "任务包含多个子任务，可以并行处理部分步骤",
-    "routing": {
-        "mode": "dynamic_subgraph",
-        "parallel": true,
-        "max_iterations": 3
-    },
-    "requires": ["http_client", "data_processor"]
-}
-
-请评估以下任务："""
 
     def __init__(self):
         self._llm_factory: Optional[LLMFactory] = None
@@ -180,9 +142,8 @@ class IntentDetector:
         # 尝试解析 JSON
         try:
             # 尝试直接解析
-            
 
-            match = re.search(r'```json\n(.*?)\n```', content, re.DOTALL)
+            match = regex_module.search(r'```json\n(.*?)\n```', content, regex_module.DOTALL)
             if match:
                 json_str = match.group(1)
                 result = json.loads(json_str)
@@ -192,7 +153,7 @@ class IntentDetector:
             return self._normalize_intent_result(result)
         except json.JSONDecodeError:
             # 尝试从文本中提取 JSON
-            json_match = re.search(r'\{[\s\S]*\}', content)
+            json_match = regex_module.search(r'\{[\s\S]*\}', content)
             if json_match:
                 try:
                     result = json.loads(json_match.group())
@@ -253,137 +214,72 @@ class IntentDetector:
         """
         评估任务复杂度并决定路由策略
 
+        简化版：现在返回统一的路由配置，不再区分复杂度。
+        所有任务都使用相同的执行能力（迭代、重规划、并行、Supervisor检查）。
+
         Args:
             task: 用户任务
             intents: 检测到的意图列表
 
         Returns:
-            包含 complexity 和 routing 的字典
+            统一格式的路由配置字典
         """
-        # 1. 快速判断：基于关键词的启发式规则
-        heuristic = self._heuristic_complexity(task, intents)
-        if heuristic["use_heuristic"]:
-            logger.info(f"[IntentDetector] 使用启发式复杂度评估: {heuristic['complexity']}")
-            return heuristic
+        logger.info("[IntentDetector] 使用统一执行配置 (所有任务共享完整能力)")
 
-        # 2. LLM 详细评估
-        if self._use_llm:
-            try:
-                result = await self._evaluate_complexity_with_llm(task, intents)
-                logger.info(f"[IntentDetector] LLM复杂度评估: {result.get('complexity')}")
-                return result
-            except Exception as e:
-                logger.warning(f"[IntentDetector] LLM复杂度评估失败: {e}")
+        return self._get_unified_routing_config()
 
-        # 3. 降级到启发式
-        return self._heuristic_complexity(task, intents)
+    def _get_unified_routing_config(self) -> Dict[str, Any]:
+        """
+        获取统一的路由配置
 
-    def _heuristic_complexity(self, task: str, intents: List[str]) -> Dict[str, Any]:
-        """基于规则的启发式复杂度评估（无 LLM 调用）"""
-        task_lower = task.lower()
-        complexity_score = 0
-
-        # 检查高复杂度关键词
-        for keyword in COMPLEXITY_HIGH_KEYWORDS:
-            if keyword in task_lower:
-                complexity_score += 2
-
-        # 检查中复杂度关键词
-        for keyword in COMPLEXITY_MEDIUM_KEYWORDS:
-            if keyword in task_lower:
-                complexity_score += 1
-
-        # 多意图增加复杂度
-        complexity_score += len(intents) * 0.5
-
-        # 任务长度（长任务通常更复杂）
-        complexity_score += min(len(task) / 100, 3)
-
-        # 判断复杂度等级
-        if complexity_score >= 4:
-            complexity = "high"
-            mode = "multi_agent"
-            parallel = True
-            max_iterations = 10
-        elif complexity_score >= 2:
-            complexity = "medium"
-            mode = "dynamic_subgraph"
-            parallel = True
-            max_iterations = 5
-        else:
-            complexity = "low"
-            mode = "simple"
-            parallel = False
-            max_iterations = 3
-
+        所有任务都使用相同的能力集：
+        - 迭代循环（最多15次）
+        - 并行执行
+        - 重规划能力
+        - Supervisor检查
+        - 超时延长（5分钟）
+        """
         return {
-            "complexity": complexity,
-            "estimated_steps": max(1, int(complexity_score + 1)),
-            "reasoning": f"启发式评估: 复杂度分数={complexity_score:.1f}",
+            "complexity": "unified",  # 统一模式标记
+            "estimated_steps": 3,  # 预估步骤数（仅供参考）
+            "reasoning": "统一执行模式：所有任务共享完整能力",
             "routing": {
-                "mode": mode,
-                "parallel": parallel,
-                "max_iterations": max_iterations,
+                "mode": "unified",                    # 统一模式
+                "parallel": True,                       # 启用并行
+                "max_iterations": 15,                 # 最大迭代次数
+                "max_retries": 3,                     # 最大重试次数
+                "default_step_timeout": 300,           # 默认超时: 5分钟
+                "http_step_timeout": 600,              # HTTP超时: 10分钟
             },
-            "requires": intents,
-            "use_heuristic": True,
-        }
-
-    async def _evaluate_complexity_with_llm(self, task: str, intents: List[str]) -> Dict[str, Any]:
-        """使用 LLM 进行复杂度评估"""
-        context = f"\n\n检测到的意图: {', '.join(intents)}" if intents else ""
-
-        response = await self.llm_factory.chat(
-            messages=[
-                {"role": "user", "content": f"{self.COMPLEXITY_PROMPT}\n\n用户任务: {task}{context}"}
-            ],
-            model=None,
-            strategy="cost",
-            temperature=0.1,
-            max_tokens=600,
-        )
-
-        content = response.content.strip()
-
-        # 尝试解析 JSON
-        try:
-            result = json.loads(content)
-            return self._normalize_complexity_result(result)
-        except json.JSONDecodeError:
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                try:
-                    result = json.loads(json_match.group())
-                    return self._normalize_complexity_result(result)
-                except json.JSONDecodeError:
-                    pass
-
-        # 解析失败，使用降级
-        logger.warning(f"[IntentDetector] 复杂度JSON解析失败，使用启发式降级")
-        return self._heuristic_complexity(task, intents)
-
-    def _normalize_complexity_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """标准化复杂度评估结果"""
-        complexity = result.get("complexity", "low")
-        if complexity not in ["low", "medium", "high"]:
-            complexity = "low"
-
-        routing = result.get("routing", {})
-        if not isinstance(routing, dict):
-            routing = {"mode": "simple", "parallel": False, "max_iterations": 3}
-
-        return {
-            "complexity": complexity,
-            "estimated_steps": int(result.get("estimated_steps", 1)),
-            "reasoning": result.get("reasoning", ""),
-            "routing": {
-                "mode": routing.get("mode", "simple"),
-                "parallel": routing.get("parallel", False),
-                "max_iterations": int(routing.get("max_iterations", 5)),
-            },
-            "requires": result.get("requires", []),
+            "requires": [],  # 不再需要指定所需资源
             "use_heuristic": False,
         }
+
+    def _heuristic_complexity(self, task: str, intents: List[str]) -> Dict[str, Any]:
+        """
+        保留向后兼容的启发式复杂度评估
+
+        警告：此方法已被弃用，仅用于向后兼容。
+        新代码应使用 _get_unified_routing_config()。
+        """
+        return self._get_unified_routing_config()
+
+    async def _evaluate_complexity_with_llm(self, task: str, intents: List[str]) -> Dict[str, Any]:
+        """
+        保留向后兼容的 LLM 复杂度评估
+
+        警告：此方法已被弃用，新代码应使用统一的执行配置。
+        """
+        logger.info("[IntentDetector] LLM复杂度评估已弃用，使用统一配置")
+        return self._get_unified_routing_config()
+
+    def _normalize_complexity_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        保留向后兼容的结果标准化
+
+        警告：此方法已被弃用。
+        """
+        return self._get_unified_routing_config()
 
 
 class KeywordIntentDetector:

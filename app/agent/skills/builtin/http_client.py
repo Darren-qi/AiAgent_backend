@@ -24,7 +24,8 @@ class HTTPClientSkill(BaseSkill):
         url = kwargs.get("url")
         method = kwargs.get("method", "GET").upper()
         headers = kwargs.get("headers", {})
-        timeout = kwargs.get("timeout", 30)
+        # 延长默认超时时间从 30s 到 120s，避免因网络延迟导致超时
+        timeout = kwargs.get("timeout", 120)
 
         if not url:
             return SkillResult(success=False, error="缺少 url 参数")

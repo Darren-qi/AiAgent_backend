@@ -145,6 +145,13 @@ class SessionModel(Base, IDMixin, TimestampMixin):
         comment="元数据",
     )
 
+    # 任务文件存储路径 (JSON)
+    task_path: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="任务文件存储路径，格式: AiAgent/tasks/<项目名>_<时间戳>/",
+    )
+
 
 class TaskModel(Base, IDMixin, TimestampMixin):
     """

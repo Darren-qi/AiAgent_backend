@@ -1,7 +1,7 @@
 """存储提供商基类"""
 
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 
 class BaseStorageProvider(ABC):
@@ -36,4 +36,14 @@ class BaseStorageProvider(ABC):
     @abstractmethod
     async def list(self, prefix: str = "", max_keys: int = 100) -> list:
         """列出文件"""
+        pass
+
+    @abstractmethod
+    async def write_file(self, content: str, filename: str, folder: str) -> Dict[str, Any]:
+        """直接写入文本文件"""
+        pass
+
+    @abstractmethod
+    async def build_file_tree(self, folder_name: str) -> List[Dict[str, Any]]:
+        """构建文件树"""
         pass

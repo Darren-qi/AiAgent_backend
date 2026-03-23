@@ -20,6 +20,7 @@ from app.core.security import (
     verify_access_token,
     verify_refresh_token,
     hash_password,
+    verify_password,
 )
 from app.core.config import get_settings
 from app.core.exceptions import (

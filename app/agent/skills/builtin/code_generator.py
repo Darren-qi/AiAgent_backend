@@ -56,14 +56,36 @@ class CodeGeneratorSkill(BaseSkill):
 
     def _build_prompt(self, requirements: str, language: str, framework: str) -> str:
         framework_hint = f"，使用 {framework} 框架" if framework else ""
-        return f"""请生成 {language} 代码{framework_hint}。
+        import time
+        timestamp = int(time.time() * 1000)
 
-需求描述：
+        return f"""你是一个专业的代码生成专家。请根据以下需求生成高质量代码。
+
+## 基本信息
+- 编程语言：{language}{framework_hint}
+- 时间戳：{timestamp}（用于生成唯一项目标识）
+
+## 需求描述
 {requirements}
 
-要求：
-1. 代码简洁、规范、可直接运行
-2. 包含必要的注释说明
-3. 错误处理完善
-4. 返回纯代码，不需要额外解释
+## 文件输出规则（必须严格遵守，违反将导致系统错误）
+1. **重要**：不要在文件路径中写项目文件夹名！系统会自动添加！
+   - ❌ 错误：`../tasks/blog_system_{timestamp}/app.py`（包含项目名）
+   - ✅ 正确：`app.py`（只写相对于项目根目录的路径）
+   - ✅ 正确：`templates/base.html`
+   - ✅ 正确：`static/css/style.css`
+2. **所有文件路径都是相对于项目根目录的**，不要包含 `blog_system_xxx/` 或类似前缀
+3. **严格禁止**：
+   - ❌ 禁止在 backend/ 或其子目录下创建文件
+   - ❌ 禁止使用绝对路径（如 e:/Projects/AiAgent/backend/...）
+   - ❌ 禁止在路径中写项目文件夹名
+
+## 代码质量要求
+- 代码简洁、规范、可直接运行
+- 包含必要的注释说明
+- 错误处理完善
+- 遵循该语言的代码规范
+
+## 输出要求
+请直接返回生成的代码。文件路径在代码注释中标明。
 """

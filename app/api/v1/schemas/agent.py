@@ -11,6 +11,7 @@ class AgentExecuteRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="会话 ID")
     strategy: Optional[str] = Field(None, description="LLM 路由策略")
     context: Optional[Dict[str, Any]] = Field(None, description="额外上下文")
+    task_path: Optional[str] = Field(None, description="任务文件存储路径")
 
 
 class AgentExecuteResponse(BaseModel):

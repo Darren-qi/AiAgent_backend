@@ -1,7 +1,7 @@
 """存储管理器 - 统一管理多种对象存储"""
 
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from enum import Enum
 
@@ -76,3 +76,11 @@ class StorageManager:
     async def list_files(self, prefix: str = "", max_keys: int = 100) -> list:
         """列出文件"""
         return await self._provider.list(prefix, max_keys)
+
+    async def write_file(self, content: str, filename: str, folder: str) -> Dict[str, Any]:
+        """直接写入文本文件"""
+        return await self._provider.write_file(content, filename, folder)
+
+    async def build_file_tree(self, folder_name: str) -> List[Dict[str, Any]]:
+        """构建文件树"""
+        return await self._provider.build_file_tree(folder_name)

@@ -10,6 +10,33 @@ from app.agent.skills.registry import registry
 
 logger = logging.getLogger(__name__)
 
+# 计划分析 Prompt - 对每个计划项进行深入分析
+PLAN_ANALYSIS_PROMPT = """你是一个任务执行分析专家。请对以下执行计划中的每个步骤进行深入分析。
+
+## 用户任务
+{task}
+
+## 执行计划
+{plan}
+
+## 分析要求
+对每个步骤，分析以下内容：
+1. **步骤目的**：这个步骤要达成什么目标
+2. **执行策略**：如何正确执行这个步骤
+3. **可能的问题**：执行中可能遇到什么困难
+4. **预期结果**：成功执行后的预期产出
+
+## 输出格式
+按以下格式输出每个步骤的分析（不需要完整JSON，用简洁的描述性文字）：
+
+**步骤 1: [动作名称]**
+- 目的：[分析目的]
+- 策略：[执行策略]
+- 注意：[需要注意的问题]
+- 预期：[预期结果]
+
+请开始分析："""
+
 
 # Skill 清单（用于规划参考）
 AVAILABLE_SKILLS = {
@@ -180,6 +207,47 @@ class Planner:
         plan = self._create_heuristic_plan(task, intent)
         logger.info(f"[Planner] 使用启发式规划，包含 {len(plan)} 个步骤")
         return plan
+
+    async def analyze_plan(self, task: str, plan: List[Dict[str, Any]]) -> str:
+        """
+        对执行计划中的每个步骤进行深入分析
+
+        Args:
+            task: 用户任务描述
+            plan: 执行计划列表
+
+        Returns:
+            每个步骤的分析描述
+        """
+        if not plan:
+            return ""
+
+        logger.info(f"[Planner] 分析计划，包含 {len(plan)} 个步骤")
+
+        # 将计划转为可读格式
+        plan_str = "\n".join([
+            f"  步骤 {p.get('step', i+1)}: [{p.get('action')}] {p.get('description', '')}"
+            for i, p in enumerate(plan)
+        ])
+
+        prompt = PLAN_ANALYSIS_PROMPT.format(
+            task=task,
+            plan=plan_str
+        )
+
+        try:
+            response = await self.llm_factory.chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=None,
+                strategy="quality",
+                temperature=0.3,
+                max_tokens=1500,
+            )
+            return response.content.strip()
+        except Exception as e:
+            logger.warning(f"[Planner] 计划分析失败: {e}")
+            # 降级：返回简单描述
+            return self._generate_simple_analysis(plan)
 
     async def _create_plan_with_llm(self, task: str, intent: str) -> Optional[List[Dict[str, Any]]]:
         """使用 LLM 生成执行计划"""
@@ -386,6 +454,20 @@ class Planner:
                 step["params"] = {}
 
         return plan
+
+    def _generate_simple_analysis(self, plan: List[Dict[str, Any]]) -> str:
+        """生成简单的计划分析（降级方案）"""
+        analyses = []
+        for i, step in enumerate(plan):
+            action = step.get("action", "unknown")
+            desc = step.get("description", "")
+            analyses.append(
+                f"**步骤 {i+1}: [{action}]**\n"
+                f"- 目的：{desc or '执行指定操作'}\n"
+                f"- 策略：调用 {action} 完成此步骤\n"
+                f"- 注意：确保参数正确传递"
+            )
+        return "\n\n".join(analyses)
 
     def get_available_skills(self) -> Dict[str, Dict[str, Any]]:
         """获取所有可用 Skill"""

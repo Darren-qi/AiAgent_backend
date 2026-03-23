@@ -1,7 +1,7 @@
 """腾讯云 COS 存储"""
 
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from app.agent.tools.storage.providers.base import BaseStorageProvider
 
 
@@ -73,4 +73,12 @@ class TencentCOSProvider(BaseStorageProvider):
 
     async def list(self, prefix: str = "", max_keys: int = 100) -> list:
         """列出文件"""
+        return []
+
+    async def write_file(self, content: str, filename: str, folder: str) -> Dict[str, Any]:
+        """写入文本文件（云存储不支持直接写入，返回错误）"""
+        return {"success": False, "error": "云存储不支持直接写入，请使用 upload 方法"}
+
+    async def build_file_tree(self, folder_name: str) -> List[Dict[str, Any]]:
+        """构建文件树（云存储暂不支持）"""
         return []
