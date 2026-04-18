@@ -5,7 +5,7 @@ import logging
 from typing import Dict, Any, Optional, List
 
 from app.agent.agents.base import BaseAgent, AgentType, AgentResult
-from app.agent.skills.registry import registry
+from app.agent.skills.core.progressive_loader import get_loader
 
 logger = logging.getLogger(__name__)
 
@@ -178,19 +178,28 @@ class ExecutorAgent(BaseAgent):
         skill_name = subtask.get("skill", "general_response")
 
         try:
-            skill = registry.get(skill_name)
-            if not skill:
-                # 如果没有对应 Skill，使用 LLM 作为后备
-                logger.warning(f"[ExecutorAgent] 未找到 Skill '{skill_name}'，使用 LLM 作为后备")
-                return await self._fallback_to_llm(subtask)
-
-            result = await skill.execute(**params)
+            loader = get_loader()
+            result = await loader.execute(skill_name, params)
             return {
                 "success": result.success,
                 "data": result.data,
                 "error": result.error
             }
         except Exception as e:
+            # 备用：尝试从旧 registry 执行
+            try:
+                from app.agent.skills.registry import registry
+                skill = registry.get(skill_name)
+                if skill:
+                    result = await skill.execute(**params)
+                    return {
+                        "success": result.success,
+                        "data": result.data,
+                        "error": result.error
+                    }
+            except:
+                pass
+
             logger.error(f"[ExecutorAgent] 执行 Skill '{skill_name}' 失败: {e}")
             return {"success": False, "error": str(e)}
 

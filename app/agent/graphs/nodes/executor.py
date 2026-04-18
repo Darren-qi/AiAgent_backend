@@ -2,31 +2,44 @@
 
 from typing import Any, Dict, Optional
 
-from app.agent.skills.registry import registry
+from app.agent.skills.core.progressive_loader import get_loader
 
 
 class Executor:
-    """任务执行器"""
+    """任务执行器（支持新旧 Skill 结构）"""
 
     def __init__(self):
-        self._skill_registry = registry
+        self._loader = get_loader()
 
     async def execute_step(self, step: Dict[str, Any]) -> Dict[str, Any]:
         """执行单个步骤"""
         action = step.get("action")
         params = step.get("params", {})
 
-        skill = self._skill_registry.get(action)
-        if not skill:
-            return {"success": False, "error": f"未找到 Skill: {action}"}
+        # 尝试从新加载器执行
+        try:
+            result = await self._loader.execute(action, params)
+            return {
+                "success": result.success,
+                "data": result.data,
+                "error": result.error,
+            }
+        except Exception as e:
+            # 备用：尝试从旧 registry 执行
+            try:
+                from app.agent.skills.registry import registry
+                skill = registry.get(action)
+                if skill:
+                    result = await skill.execute(**params)
+                    return {
+                        "success": result.success,
+                        "data": result.data,
+                        "error": result.error,
+                    }
+            except:
+                pass
 
-        result = await skill.execute(**params)
-
-        return {
-            "success": result.success,
-            "data": result.data,
-            "error": result.error,
-        }
+            return {"success": False, "error": f"执行 Skill '{action}' 失败: {e}"}
 
     async def execute_plan(self, plan: list) -> list:
         """执行完整计划"""

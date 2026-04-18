@@ -69,7 +69,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
             memory_manager = manager.memory_managers.get(session_id)
             if memory_manager:
-                memory_manager.add_user_message(task)
+                await memory_manager.add_user_message(task)
 
             graph = AgentGraph()
 
@@ -80,7 +80,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 )
 
                 if memory_manager:
-                    memory_manager.add_assistant_message(str(result.get("result", "")))
+                    await memory_manager.add_assistant_message(str(result.get("result", "")))
 
                 await websocket.send_json({
                     "type": "result",

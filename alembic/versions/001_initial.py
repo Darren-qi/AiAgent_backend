@@ -1,8 +1,8 @@
-"""Initial migration
+"""Initial migration - create all tables
 
-Revision ID: 001_initial
+Revision ID: 001
 Revises:
-Create Date: 2026-03-19
+Create Date: 2026-03-21 10:00:00
 
 """
 from typing import Sequence, Union
@@ -10,76 +10,77 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-
-# revision identifiers, used by Alembic.
-revision: str = '001_initial'
+revision: str = '001'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # 创建用户表
     op.create_table(
         'users',
-        sa.Column('id', sa.Integer(), nullable=False),
-        sa.Column('username', sa.String(length=50), nullable=False),
-        sa.Column('email', sa.String(length=255), nullable=False),
-        sa.Column('nickname', sa.String(length=100), nullable=True),
-        sa.Column('avatar', sa.String(length=500), nullable=True),
-        sa.Column('bio', sa.Text(), nullable=True),
-        sa.Column('hashed_password', sa.String(length=255), nullable=False),
-        sa.Column('email_verified', sa.Boolean(), nullable=False),
-        sa.Column('email_verification_token', sa.String(length=255), nullable=True),
-        sa.Column('password_reset_token', sa.String(length=255), nullable=True),
-        sa.Column('password_reset_expires', sa.DateTime(timezone=True), nullable=True),
-        sa.Column('role', sa.String(length=20), nullable=False),
-        sa.Column('status', sa.String(length=20), nullable=False),
-        sa.Column('login_failures', sa.Integer(), nullable=False),
-        sa.Column('last_login_at', sa.DateTime(timezone=True), nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
-        sa.PrimaryKeyConstraint('id'),
-        sa.UniqueConstraint('username'),
-        sa.UniqueConstraint('email'),
+        sa.Column('id', sa.Integer(), primary_key=True),
+        sa.Column('username', sa.String(50), unique=True, nullable=False),
+        sa.Column('email', sa.String(100), unique=True, nullable=False),
+        sa.Column('hashed_password', sa.String(255), nullable=False),
+        sa.Column('is_active', sa.Boolean(), default=True),
+        sa.Column('is_superuser', sa.Boolean(), default=False),
+        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.Column('updated_at', sa.DateTime(), nullable=False),
     )
-    op.create_index('ix_users_username', 'users', ['username'])
-    op.create_index('ix_users_email', 'users', ['email'])
 
-    # 创建文章表
     op.create_table(
-        'posts',
-        sa.Column('id', sa.Integer(), nullable=False),
-        sa.Column('title', sa.String(length=255), nullable=False),
-        sa.Column('content', sa.Text(), nullable=False),
-        sa.Column('summary', sa.Text(), nullable=True),
-        sa.Column('cover_image', sa.String(length=500), nullable=True),
-        sa.Column('category', sa.String(length=50), nullable=True),
-        sa.Column('tags', sa.String(length=255), nullable=True),
-        sa.Column('status', sa.String(length=20), nullable=False),
-        sa.Column('visibility', sa.String(length=20), nullable=False),
-        sa.Column('view_count', sa.Integer(), nullable=False),
-        sa.Column('like_count', sa.Integer(), nullable=False),
-        sa.Column('comment_count', sa.Integer(), nullable=False),
-        sa.Column('slug', sa.String(length=255), nullable=False),
-        sa.Column('meta_description', sa.String(length=160), nullable=True),
-        sa.Column('published_at', sa.DateTime(timezone=True), nullable=True),
-        sa.Column('author_id', sa.Integer(), nullable=False),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
-        sa.ForeignKeyConstraint(['author_id'], ['users.id'], ondelete='CASCADE'),
-        sa.PrimaryKeyConstraint('id'),
-        sa.UniqueConstraint('slug'),
+        'experiences',
+        sa.Column('id', sa.String(36), primary_key=True),
+        sa.Column('task', sa.String(500), nullable=False),
+        sa.Column('task_type', sa.String(50), nullable=False),
+        sa.Column('description', sa.Text(), nullable=False),
+        sa.Column('solution', sa.Text(), nullable=False),
+        sa.Column('steps', sa.JSON(), nullable=True),
+        sa.Column('success', sa.Boolean(), default=True, nullable=False),
+        sa.Column('success_count', sa.Integer(), default=1, nullable=False),
+        sa.Column('failure_count', sa.Integer(), default=0, nullable=False),
+        sa.Column('meta_data', sa.JSON(), nullable=True),
+        sa.Column('user_id', sa.Integer(), nullable=True),
+        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.Column('updated_at', sa.DateTime(), nullable=False),
     )
-    op.create_index('ix_posts_title', 'posts', ['title'])
-    op.create_index('ix_posts_slug', 'posts', ['slug'])
-    op.create_index('ix_posts_category', 'posts', ['category'])
-    op.create_index('ix_posts_status', 'posts', ['status'])
-    op.create_index('ix_posts_author_id', 'posts', ['author_id'])
+
+    op.create_table(
+        'sessions',
+        sa.Column('id', sa.Integer(), primary_key=True),
+        sa.Column('session_id', sa.String(100), unique=True, nullable=False),
+        sa.Column('user_id', sa.Integer(), nullable=False),
+        sa.Column('title', sa.String(200), nullable=True),
+        sa.Column('status', sa.String(20), default='active', nullable=False),
+        sa.Column('meta_data', sa.JSON(), nullable=True),
+        sa.Column('task_path', sa.String(500), nullable=True),
+        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.Column('updated_at', sa.DateTime(), nullable=False),
+    )
+
+    op.create_table(
+        'tasks',
+        sa.Column('id', sa.String(36), primary_key=True),
+        sa.Column('task_id', sa.String(100), unique=True, nullable=False),
+        sa.Column('session_id', sa.String(100), nullable=False),
+        sa.Column('user_id', sa.Integer(), nullable=False),
+        sa.Column('task', sa.Text(), nullable=False),
+        sa.Column('task_type', sa.String(50), nullable=True),
+        sa.Column('status', sa.String(20), default='pending', nullable=False),
+        sa.Column('result', sa.Text(), nullable=True),
+        sa.Column('error', sa.Text(), nullable=True),
+        sa.Column('execution_time', sa.Float(), nullable=True),
+        sa.Column('cost', sa.Float(), default=0.0, nullable=False),
+        sa.Column('model', sa.String(50), nullable=True),
+        sa.Column('meta_data', sa.JSON(), nullable=True),
+        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.Column('updated_at', sa.DateTime(), nullable=False),
+    )
 
 
 def downgrade() -> None:
-    op.drop_table('posts')
+    op.drop_table('tasks')
+    op.drop_table('sessions')
+    op.drop_table('experiences')
     op.drop_table('users')

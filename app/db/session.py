@@ -71,6 +71,23 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 # =============================================
+# 兼容性别名 (供旧代码使用)
+# =============================================
+
+@asynccontextmanager
+async def async_session():
+    """
+    兼容性别别 - 用于需要 async generator 的场景
+
+    使用示例:
+        async for session in async_session():
+            # 使用 session
+    """
+    async with AsyncSessionLocal() as session:
+        yield session
+
+
+# =============================================
 # 会话依赖注入
 # =============================================
 

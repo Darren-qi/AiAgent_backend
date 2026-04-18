@@ -73,33 +73,54 @@ class TestDynamicSubgraph:
 
 
 class TestSkillLoader:
-    """Test SkillLoader"""
+    """Test ProgressiveSkillLoader"""
 
-    def test_load_skills_from_directory(self):
-        """测试从目录加载技能"""
-        from app.agent.skills.loader import SkillLoader
+    def test_bootstrap(self):
+        """测试引导加载器"""
+        from app.agent.skills.core.progressive_loader import ProgressiveSkillLoader
 
-        loader = SkillLoader()
-        skills = loader.load_skills()
-        assert isinstance(skills, list)
+        loader = ProgressiveSkillLoader()
+        count = loader.bootstrap()
+        assert count > 0
+        assert len(loader._index) == count
 
-    def test_get_skill(self):
-        """测试获取指定技能"""
-        from app.agent.skills.loader import SkillLoader
+    def test_get_all_metadata(self):
+        """测试获取所有 Skill 元数据"""
+        from app.agent.skills.core.progressive_loader import ProgressiveSkillLoader
 
-        loader = SkillLoader()
-        skill = loader.get_skill("test_skill")
-        assert skill is None or skill is not None
+        loader = ProgressiveSkillLoader()
+        loader.bootstrap()
+        metadata = loader.get_all_metadata()
+        assert isinstance(metadata, list)
+        assert len(metadata) > 0
+
+    def test_match_skills(self):
+        """测试 Skill 匹配"""
+        from app.agent.skills.core.progressive_loader import ProgressiveSkillLoader
+
+        loader = ProgressiveSkillLoader()
+        loader.bootstrap()
+        matches = loader.match("创建文件")
+        assert isinstance(matches, list)
 
 
 class TestSkillValidator:
-    """Test SkillValidator"""
+    """Test Skill Validator"""
 
     def test_validate_parameters(self):
         """测试参数验证"""
-        from app.agent.skills.validator import SkillValidator
+        from app.agent.skills.core.base_skill import BaseSkill
 
-        validator = SkillValidator()
-        result = validator.validate("test_skill", {"param1": "value1"})
-        assert isinstance(result, dict)
-        assert "valid" in result or "error" in result
+        class DummySkill(BaseSkill):
+            async def execute(self, **kwargs):
+                pass
+
+        skill = DummySkill()
+        skill.parameters = [
+            {"name": "param1", "required": True}
+        ]
+        valid, error = skill.validate_parameters({"param1": "value"})
+        assert valid == True
+
+        valid, error = skill.validate_parameters({})
+        assert valid == False

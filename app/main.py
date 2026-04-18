@@ -34,6 +34,7 @@ from app.middleware.request_id import (
     RequestLoggingMiddleware,
 )
 from app.utils.logger import setup_logger, log_info, log_error
+from app.agent.skills.core.progressive_loader import bootstrap as bootstrap_skills
 
 
 @asynccontextmanager
@@ -52,6 +53,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         log_info("数据库连接已建立")
     except Exception as e:
         log_error(f"数据库连接失败: {e}")
+
+    # 引导 Skill 加载器（渐进式加载）
+    try:
+        skill_count = bootstrap_skills()
+        log_info(f"Skill 加载器已引导，加载 {skill_count} 个技能")
+    except Exception as e:
+        log_error(f"Skill 加载器引导失败: {e}")
 
     log_info("应用启动完成")
 

@@ -29,12 +29,12 @@ services:
       - ZHIPU_API_KEY=${ZHIPU_API_KEY:-}
       # 存储配置
       - STORAGE_PROVIDER=${STORAGE_PROVIDER:-local}
-      - LOCAL_STORAGE_PATH=/app/uploads
+      - LOCAL_STORAGE_PATH=/app/tasks
       # 其他配置
       - LOG_LEVEL=INFO
     volumes:
       - ../logs:/app/logs
-      - ../uploads:/app/uploads
+      - ../tasks:/app/tasks
     depends_on:
       - postgres
       - redis

@@ -1,14 +1,42 @@
 """规划器节点 - LLM 动态规划"""
 
+import asyncio
 import json
 import re
 import logging
 from typing import Dict, Any, List, Optional
 
 from app.agent.llm.factory import LLMFactory
-from app.agent.skills.registry import registry
+from app.agent.skills.core.progressive_loader import get_loader, ProgressiveSkillLoader
 
 logger = logging.getLogger(__name__)
+
+# 快速待办生成 Prompt - 简洁输出，每行 checkbox
+QUICK_TODOS_PROMPT = """你是一个任务规划专家。请将用户任务分解为简洁的待办事项。
+
+## 用户任务
+{task}
+
+## 输出要求
+1. 只输出 2-5 个待办事项，不要太多
+2. 每行一个事项，格式: `- [ ] 事项描述`
+3. 事项描述要简洁，一行说完
+4. 不要详细展开每个步骤的实现细节
+
+## 示例
+输入: "为用户模块添加 JWT 认证功能"
+输出:
+- [ ] 创建 JWT 认证工具类
+- [ ] 实现登录接口
+- [ ] 添加 Token 验证中间件
+
+输入: "爬取某网站新闻并保存"
+输出:
+- [ ] 获取网页内容
+- [ ] 解析新闻数据
+- [ ] 保存到文件
+
+请为以下任务生成待办："""
 
 # 计划分析 Prompt - 对每个计划项进行深入分析
 PLAN_ANALYSIS_PROMPT = """你是一个任务执行分析专家。请对以下执行计划中的每个步骤进行深入分析。
@@ -37,6 +65,82 @@ PLAN_ANALYSIS_PROMPT = """你是一个任务执行分析专家。请对以下执
 
 请开始分析："""
 
+# Thought 阶段 Prompt - 分析当前状态
+THOUGHT_PROMPT = """你正在执行用户任务中的某个待办事项。
+
+## 用户任务
+{task}
+
+## 当前待办
+todo_id: {todo_id}
+title: {title}
+
+## 历史上下文
+{context}
+
+## 思考要求
+1. 分析当前待办的目标
+2. 考虑需要的资源和步骤
+3. 预判可能的困难
+4. 简明输出你的思考
+
+请输出你的思考："""
+
+# Planning 阶段 Prompt - 生成执行计划
+PLANNING_PROMPT = """基于你的思考，制定具体的执行动作。
+
+## 用户任务
+{task}
+
+## 当前待办
+todo_id: {todo_id}
+title: {title}
+
+## 你的思考
+{thought}
+
+## 可用工具
+{skill_list}
+
+## 输出要求
+1. 选择最合适的工具/动作
+2. 给出具体的参数
+3. 简洁明了
+
+输出格式：
+动作: <action_name>
+参数: <具体参数>
+原因: <为什么选择这个动作>
+
+请输出："""
+
+# Observation 阶段 Prompt - 验证结果
+OBSERVATION_PROMPT = """观察执行结果，判断待办是否完成。
+
+## 用户任务
+{task}
+
+## 当前待办
+todo_id: {todo_id}
+title: {title}
+
+## 执行动作
+action: {action}
+参数: {params}
+
+## 执行结果
+{result}
+
+## 判断要求
+1. 结果是否成功？
+2. 是否达到预期效果？
+3. 是否需要继续或调整？
+
+输出格式：
+完成状态: [已完成 / 部分完成 / 未完成]
+原因: <判断理由>
+建议: <下一步建议>
+"""
 
 # Skill 清单（用于规划参考）
 AVAILABLE_SKILLS = {
@@ -47,7 +151,7 @@ AVAILABLE_SKILLS = {
     },
     "code_generator": {
         "description": "生成代码，支持多种编程语言",
-        "params": ["language", "requirements", "framework"],
+        "params": ["language", "requirements", "framework", "task_path"],
         "use_for": ["写代码", "生成代码", "编程"]
     },
     "data_processor": {
@@ -55,9 +159,41 @@ AVAILABLE_SKILLS = {
         "params": ["operation", "input_data", "options"],
         "use_for": ["数据处理", "统计分析", "数据转换"]
     },
+    # 文件操作（细粒度）
+    "init_project": {
+        "description": "初始化项目结构 - 创建项目根目录和基础文件框架",
+        "params": ["path", "content"],
+        "use_for": ["创建项目", "初始化项目", "创建项目结构", "新建项目目录"]
+    },
+    "write_file": {
+        "description": "写入文件 - 创建新文件或覆盖已有文件内容",
+        "params": ["path", "content", "task_path"],
+        "use_for": ["写文件", "创建文件", "保存文件", "写入代码", "生成模型文件"]
+    },
+    "read_file": {
+        "description": "读取文件 - 查看文件内容",
+        "params": ["path"],
+        "use_for": ["读取文件", "查看文件", "读取代码"]
+    },
+    "edit_file": {
+        "description": "编辑文件 - 修改已有文件内容（支持增量修改）",
+        "params": ["path", "content", "operation"],
+        "use_for": ["编辑文件", "修改代码", "更新文件"]
+    },
+    "delete_file": {
+        "description": "删除文件或目录",
+        "params": ["path"],
+        "use_for": ["删除文件", "删除目录"]
+    },
+    "list_dir": {
+        "description": "列出目录内容",
+        "params": ["path"],
+        "use_for": ["列出目录", "查看目录"]
+    },
+    # 兼容旧名称
     "file_operations": {
-        "description": "文件读写、目录操作",
-        "params": ["operation", "path", "content"],
+        "description": "文件操作（通用）- 支持 init_project/write_file/read_file/edit_file/delete_file 等操作",
+        "params": ["operation", "path", "content", "task_path"],
         "use_for": ["文件操作", "读写文件"]
     },
     "notification": {
@@ -153,6 +289,7 @@ class Planner:
     def __init__(self):
         self._llm_factory: Optional[LLMFactory] = None
         self._use_llm = True
+        self._task_id: Optional[str] = None
         self._fallback_intents = {
             "crawler": ["http_client", "data_processor"],
             "code": ["code_generator"],
@@ -164,6 +301,10 @@ class Planner:
             "general": ["general_response"],
         }
 
+    def set_task_id(self, task_id: str) -> None:
+        """设置任务 ID，用于可取消的 LLM 调用"""
+        self._task_id = task_id
+
     @property
     def llm_factory(self) -> LLMFactory:
         """延迟初始化 LLM 工厂"""
@@ -172,13 +313,35 @@ class Planner:
         return self._llm_factory
 
     def _get_skill_list_str(self) -> str:
-        """生成 Skill 列表字符串"""
-        lines = []
-        for name, info in AVAILABLE_SKILLS.items():
-            params = ", ".join(info["params"]) if info["params"] else "无"
-            use_for = ", ".join(info["use_for"])
-            lines.append(f"- **{name}**: {info['description']} | 参数: {params} | 适用: {use_for}")
-        return "\n".join(lines)
+        """生成 Skill 列表字符串（从渐进式加载器获取）"""
+        try:
+            loader = get_loader()
+            return loader.get_skill_list_str()
+        except Exception as e:
+            logger.warning(f"[Planner] 获取 Skill 列表失败: {e}，使用备用方案")
+            # 备用：使用 AVAILABLE_SKILLS
+            lines = []
+            for name, info in AVAILABLE_SKILLS.items():
+                params = ", ".join(info["params"]) if info["params"] else "无"
+                use_for = ", ".join(info["use_for"])
+                lines.append(f"- **{name}**: {info['description']} | 参数: {params} | 适用: {use_for}")
+            return "\n".join(lines)
+
+    async def _llm_chat(self, messages: list, **kwargs):
+        """
+        统一 LLM 调用方法，自动传递 task_id 以支持取消
+
+        Args:
+            messages: 消息列表
+            **kwargs: 其他参数（如 strategy, temperature 等）
+
+        Returns:
+            LLM 响应
+        """
+        # 如果有 task_id，传递它以支持可取消的 LLM 调用
+        if self._task_id:
+            kwargs["task_id"] = self._task_id
+        return await self.llm_factory.chat(messages, **kwargs)
 
     async def create_plan(self, task: str, intent: str) -> List[Dict[str, Any]]:
         """
@@ -208,6 +371,533 @@ class Planner:
         logger.info(f"[Planner] 使用启发式规划，包含 {len(plan)} 个步骤")
         return plan
 
+    async def create_quick_todos(self, task: str) -> List[Dict[str, Any]]:
+        """
+        快速生成简洁的待办列表
+
+        用于规划阶段快速输出，每行 checkbox 格式。
+
+        Args:
+            task: 用户任务描述
+
+        Returns:
+            待办列表，每项包含 id, title, action (可选), params (可选)
+        """
+        logger.info(f"[Planner] 快速生成待办: {task[:80]}...")
+
+        prompt = QUICK_TODOS_PROMPT.format(task=task)
+
+        try:
+            response = await self._llm_chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=None,
+                strategy="fast",  # 使用快速策略
+                temperature=0.3,
+                max_tokens=500,  # 限制 token，快速返回
+            )
+
+            content = response.content.strip()
+            todos = self._parse_quick_todos(content)
+
+            if todos:
+                logger.info(f"[Planner] 生成 {len(todos)} 个待办事项")
+                return todos
+
+        except Exception as e:
+            logger.warning(f"[Planner] 快速待办生成失败: {e}")
+
+        # 降级：返回简单待办
+        return self._create_fallback_todos(task)
+
+    def _parse_quick_todos(self, content: str) -> List[Dict[str, Any]]:
+        """解析快速待办输出"""
+        todos = []
+        lines = content.split('\n')
+
+        for i, line in enumerate(lines):
+            line = line.strip()
+            # 匹配 - [ ] 或 - [x] 格式
+            match = re.match(r'^[-*]\s*\[\s*[xX]?\s*\]\s*(.+)', line)
+            if match:
+                title = match.group(1).strip()
+                if title:
+                    todos.append({
+                        "id": len(todos) + 1,
+                        "title": title,
+                        "action": None,
+                        "params": {},
+                        "status": "pending"
+                    })
+
+        return todos
+
+    def _create_fallback_todos(self, task: str) -> List[Dict[str, Any]]:
+        """创建降级待办"""
+        return [{
+            "id": 1,
+            "title": f"执行任务: {task[:50]}",
+            "action": "general_response",
+            "params": {"message": task},
+            "status": "pending"
+        }]
+
+    async def think(self, task: str, todo: Dict[str, Any], context: str = "") -> str:
+        """
+        Thought 阶段：分析当前状态
+
+        Args:
+            task: 用户任务
+            todo: 当前待办项
+            context: 历史上下文
+
+        Returns:
+            思考结果
+        """
+        prompt = THOUGHT_PROMPT.format(
+            task=task,
+            todo_id=todo.get("id", 0),
+            title=todo.get("title", ""),
+            context=context or "（无历史记录）"
+        )
+
+        try:
+            response = await self._llm_chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=None,
+                strategy="quality",
+                temperature=0.5,
+                max_tokens=800,
+            )
+            return response.content.strip()
+        except asyncio.CancelledError:
+            logger.warning(f"[Planner] think LLM 调用被取消")
+            raise  # 传播取消信号，不吞掉
+        except Exception as e:
+            logger.warning(f"[Planner] Thought 阶段失败: {e}")
+            return f"思考中...（LLM 调用失败: {e}）"
+
+    async def plan_action(
+        self,
+        task: str,
+        todo: Dict[str, Any],
+        thought: str
+    ) -> Dict[str, Any]:
+        """
+        Planning 阶段：生成执行动作
+
+        Args:
+            task: 用户任务
+            todo: 当前待办项
+            thought: 思考结果
+
+        Returns:
+            动作配置 {action, params, reason}
+        """
+        skill_list = self._get_skill_list_str()
+
+        prompt = PLANNING_PROMPT.format(
+            task=task,
+            todo_id=todo.get("id", 0),
+            title=todo.get("title", ""),
+            thought=thought,
+            skill_list=skill_list
+        )
+
+        try:
+            response = await self._llm_chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=None,
+                strategy="quality",
+                temperature=0.3,
+                max_tokens=500,
+            )
+
+            content = response.content.strip()
+            plan_result = self._parse_planning_response(content, todo)
+
+            # 验证并补充必要参数
+            plan_result["params"] = self._ensure_required_params(
+                plan_result["action"],
+                plan_result["params"],
+                todo
+            )
+
+            return plan_result
+
+        except Exception as e:
+            logger.warning(f"[Planner] Planning 阶段失败: {e}")
+            return {
+                "action": "general_response",
+                "params": {"message": f"执行待办: {todo.get('title', '')}"},
+                "reason": f"降级执行（LLM 调用失败: {e}）"
+            }
+
+    async def plan_action_with_feedback(
+        self,
+        task: str,
+        todo: Dict[str, Any],
+        thought: str,
+        last_error: str = None,
+        last_result: str = None
+    ) -> Dict[str, Any]:
+        """
+        Planning 阶段：生成执行动作（带错误反馈）
+
+        如果上一步执行失败，会分析错误原因并调整参数。
+
+        Args:
+            task: 用户任务
+            todo: 当前待办项
+            thought: 思考结果
+            last_error: 上一步的错误信息
+            last_result: 上一步的执行结果
+
+        Returns:
+            动作配置 {action, params, reason}
+        """
+        skill_list = self._get_skill_list_str()
+
+        # 如果有错误，在 prompt 中添加错误反馈
+        feedback_section = ""
+        if last_error:
+            feedback_section = f"""
+## 上一步执行失败
+错误信息: {last_error}
+执行结果: {last_result}
+
+请分析失败原因，并给出修正后的动作和参数。
+
+**重要**: 必须修正上一步缺失的参数，特别是 `path` 参数必须明确指定值。"""
+
+        prompt = f"""基于你的思考，制定具体的执行动作。
+
+## 用户任务
+{task}
+
+## 当前待办
+todo_id: {todo.get("id", 0)}
+title: {todo.get("title", "")}
+
+## 你的思考
+{thought}
+{feedback_section}
+
+## 可用工具
+{skill_list}
+
+## 输出要求（必须遵守）
+1. 动作名称必须是上面列表中的有效名称
+2. **参数必须完整且具体**:
+   - file_operations: 必须包含 path、operation
+   - http_client: 必须包含 url
+   - code_generator: 必须包含 requirements/language
+3. 如果上一步失败，必须修正对应的参数
+
+## 输出格式（严格按此格式）
+```
+动作: <action_name>
+参数: {{"key": "value", "key2": "value2"}}
+原因: <为什么选择这个动作>
+```"""
+
+        try:
+            response = await self._llm_chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=None,
+                strategy="quality",
+                temperature=0.3,
+                max_tokens=500,
+            )
+
+            content = response.content.strip()
+            plan_result = self._parse_planning_response(content, todo)
+
+            # 验证并补充必要参数
+            plan_result["params"] = self._ensure_required_params(
+                plan_result["action"],
+                plan_result["params"],
+                todo
+            )
+
+            return plan_result
+
+        except asyncio.CancelledError:
+            raise  # 传播取消信号，不吞掉
+        except Exception as e:
+            logger.warning(f"[Planner] Planning 阶段失败: {e}")
+            return {
+                "action": "general_response",
+                "params": {"message": f"执行待办: {todo.get('title', '')}"},
+                "reason": f"降级执行（LLM 调用失败: {e}）"
+            }
+
+    def _ensure_required_params(
+        self,
+        action: str,
+        params: Dict[str, Any],
+        todo: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        确保必要参数存在，必要时从 session 查询或设置默认值
+
+        注意：
+        - 不生成带时间戳的临时 project_name，避免与 file_operations skill 中的
+          命名规范不一致
+        - task_path 由 main_graph._ensure_task_path 统一处理
+        """
+        params = params.copy() if params else {}
+
+        if action == "file_operations":
+            if "operation" not in params:
+                params["operation"] = "write"
+
+        elif action == "http_client":
+            if "url" not in params:
+                params["url"] = ""
+            if "method" not in params:
+                params["method"] = "GET"
+
+        elif action == "code_generator":
+            if "requirements" not in params and "language" not in params:
+                params["requirements"] = todo.get("title", "生成代码")
+
+        return params
+
+    def _parse_planning_response(self, content: str, todo: Dict[str, Any]) -> Dict[str, Any]:
+        """解析 Planning 阶段的响应"""
+        result = {
+            "action": todo.get("action") or "general_response",
+            "params": todo.get("params", {}),
+            "reason": ""
+        }
+
+        # 解析动作
+        action_match = re.search(r'动作[:：]\s*(\w+)', content)
+        if action_match:
+            result["action"] = action_match.group(1)
+
+        # 解析参数
+        # 使用非贪心匹配，只取到第一个代码块结束或行尾，防止 JSON 后的 content 混入
+        params_match = re.search(r'参数[:：]\s*(.+?)(?:\n```|\n原因:|$)', content, re.DOTALL)
+        if params_match:
+            params_str = params_match.group(1).strip()
+
+            # 1. 尝试解析为 JSON（支持 {"key": "value"} 格式）
+            parsed = self._extract_json(params_str)
+            if parsed is not None:
+                if isinstance(parsed, dict):
+                    result["params"] = parsed
+                else:
+                    result["params"] = {"value": parsed}
+            else:
+                # 2. 尝试解析为 key-value 格式 (key: value 或 key=value)
+                parsed_params = self._parse_key_value_params(params_str)
+                if parsed_params:
+                    result["params"] = parsed_params
+                else:
+                    # 3. 降级：保留原始字符串（仅在无法解析时）
+                    result["params"] = {"raw": params_str}
+
+        # 解析原因
+        reason_match = re.search(r'原因[:：]\s*(.+)', content)
+        if reason_match:
+            result["reason"] = reason_match.group(1).strip()
+
+        return result
+
+    def _extract_json(self, text: str) -> Optional[Any]:
+        """
+        从文本中提取 JSON 对象/数组，支持不规范的 LLM 输出。
+
+        处理以下常见问题：
+        - JSON 后紧跟换行、原因说明等非 JSON 内容
+        - JSON 末尾有多余逗号
+        - JSON 包含尾随注释
+        """
+        if not text:
+            return None
+
+        text = text.strip()
+
+        # 找到 JSON 开始位置
+        json_start = text.find('{')
+        if json_start < 0:
+            json_start = text.find('[')
+            if json_start < 0:
+                return None
+
+        json_candidate = text[json_start:]
+
+        # 尝试直接解析
+        try:
+            return json.loads(json_candidate)
+        except json.JSONDecodeError:
+            pass
+
+        # 策略1：截取到第一个有效的 JSON 结束位置（处理尾部混入内容）
+        depth = 0
+        in_string = False
+        escape_next = False
+        end_pos = -1
+
+        for i, ch in enumerate(json_candidate):
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == '\\':
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+
+            if ch == '{' or ch == '[':
+                depth += 1
+            elif ch == '}' or ch == ']':
+                depth -= 1
+                if depth == 0:
+                    end_pos = i + 1
+                    break
+
+        if end_pos > 0:
+            json_str = json_candidate[:end_pos]
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                pass
+
+        # 策略2：移除多余逗号（如 "key": "value", } 或 "key": "value", ]）
+        cleaned = re.sub(r',\s*([}\]])', r'\1', json_candidate)
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        # 策略3：移除尾随注释（// 或 /* ... */）
+        cleaned = re.sub(r'//.*', '', cleaned)
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        return None
+
+    def _parse_key_value_params(self, params_str: str) -> Dict[str, Any]:
+        """
+        解析 key-value 格式的参数
+
+        支持格式:
+        - path: ./flask_blog
+        - path=./flask_blog
+        - url: xxx, method: GET
+        """
+        result = {}
+
+        # 匹配 key: value 或 key=value 格式
+        # 支持逗号分隔的多个参数
+        pairs = re.split(r'[,\n]', params_str)
+        for pair in pairs:
+            pair = pair.strip()
+            if not pair:
+                continue
+
+            # 尝试 key: value 格式
+            match = re.match(r'^(\w+)\s*[:=]\s*(.+)$', pair)
+            if match:
+                key = match.group(1).strip()
+                value = match.group(2).strip().strip('"\'')
+                result[key] = value
+
+        return result
+
+    async def observe(
+        self,
+        task: str,
+        todo: Dict[str, Any],
+        action: str,
+        params: Dict[str, Any],
+        result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Observation 阶段：验证执行结果
+
+        Args:
+            task: 用户任务
+            todo: 当前待办项
+            action: 执行的动作
+            params: 执行参数
+            result: 执行结果
+
+        Returns:
+            观察结果 {completed, reason, suggestion, success}
+        """
+        prompt = OBSERVATION_PROMPT.format(
+            task=task,
+            todo_id=todo.get("id", 0),
+            title=todo.get("title", ""),
+            action=action,
+            params=str(params),
+            result=str(result)
+        )
+
+        try:
+            response = await self._llm_chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=None,
+                strategy="quality",
+                temperature=0.3,
+                max_tokens=400,
+            )
+
+            content = response.content.strip()
+            return self._parse_observation_response(content)
+
+        except asyncio.CancelledError:
+            raise  # 传播取消信号，不吞掉
+        except Exception as e:
+            logger.warning(f"[Planner] Observation 阶段失败: {e}")
+            # 降级：根据成功状态判断
+            return {
+                "completed": result.get("success", False),
+                "reason": f"观察完成（LLM 调用失败: {e}）",
+                "suggestion": "继续" if result.get("success") else "调整",
+                "success": result.get("success", False)
+            }
+
+    def _parse_observation_response(self, content: str) -> Dict[str, Any]:
+        """解析 Observation 阶段的响应"""
+        result = {
+            "completed": False,
+            "reason": "无法判断",
+            "suggestion": "继续",
+            "success": False
+        }
+
+        # 解析完成状态
+        if "已完成" in content:
+            result["completed"] = True
+            result["success"] = True
+        elif "部分完成" in content:
+            result["completed"] = False
+            result["success"] = True
+        elif "未完成" in content:
+            result["completed"] = False
+            result["success"] = False
+
+        # 解析原因
+        reason_match = re.search(r'原因[:：]\s*(.+)', content)
+        if reason_match:
+            result["reason"] = reason_match.group(1).strip()
+
+        # 解析建议
+        suggestion_match = re.search(r'建议[:：]\s*(.+)', content)
+        if suggestion_match:
+            result["suggestion"] = suggestion_match.group(1).strip()
+
+        return result
+
     async def analyze_plan(self, task: str, plan: List[Dict[str, Any]]) -> str:
         """
         对执行计划中的每个步骤进行深入分析
@@ -236,7 +926,7 @@ class Planner:
         )
 
         try:
-            response = await self.llm_factory.chat(
+            response = await self._llm_chat(
                 messages=[{"role": "user", "content": prompt}],
                 model=None,
                 strategy="quality",
@@ -244,6 +934,8 @@ class Planner:
                 max_tokens=1500,
             )
             return response.content.strip()
+        except asyncio.CancelledError:
+            raise  # 传播取消信号，不吞掉
         except Exception as e:
             logger.warning(f"[Planner] 计划分析失败: {e}")
             # 降级：返回简单描述
@@ -261,7 +953,7 @@ class Planner:
 
         prompt = f"{self.PLANNING_PROMPT.format(skill_list=skill_list)}\n\n用户任务: {task}\n检测到的意图: {intent}{experience_context}"
 
-        response = await self.llm_factory.chat(
+        response = await self._llm_chat(
             messages=[{"role": "user", "content": prompt}],
             model=None,
             strategy="quality",  # 规划需要高质量
@@ -416,7 +1108,7 @@ class Planner:
                     feedback=feedback
                 )
 
-                response = await self.llm_factory.chat(
+                response = await self._llm_chat(
                     messages=[{"role": "user", "content": prompt}],
                     model=None,
                     strategy="quality",
@@ -471,8 +1163,21 @@ class Planner:
 
     def get_available_skills(self) -> Dict[str, Dict[str, Any]]:
         """获取所有可用 Skill"""
-        return AVAILABLE_SKILLS.copy()
+        try:
+            loader = get_loader()
+            schemas = loader.get_schemas()
+            return {s["name"]: s for s in schemas}
+        except Exception as e:
+            logger.warning(f"[Planner] 获取 Skill 列表失败: {e}，使用备用方案")
+            return AVAILABLE_SKILLS.copy()
 
     def get_skill_info(self, action: str) -> Optional[Dict[str, Any]]:
         """获取指定 Skill 的信息"""
+        try:
+            loader = get_loader()
+            metadata = loader.get_metadata(action)
+            if metadata:
+                return metadata.to_dict()
+        except Exception as e:
+            logger.warning(f"[Planner] 获取 Skill {action} 信息失败: {e}")
         return AVAILABLE_SKILLS.get(action)

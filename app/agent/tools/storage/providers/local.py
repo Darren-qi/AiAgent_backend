@@ -20,17 +20,27 @@ class LocalStorageProvider(BaseStorageProvider):
     """
 
     def __init__(self):
-        # 统一使用 tasks 目录作为根目录
-        default_path = os.environ.get("LOCAL_STORAGE_PATH", "../tasks")
-        if not os.path.isabs(default_path):
-            # __file__ = backend/app/agent/tools/storage/providers/local.py
-            # 6个parent到达 backend/ 目录
-            backend_dir = Path(__file__).resolve().parent.parent.parent.parent.parent.parent
-            self.base_path = backend_dir / default_path
-            self.backend_dir = backend_dir
+        # 统一使用 tasks 目录作为根目录（位于 backend 同级的 AiAgent 目录内）
+        # 计算项目根目录（AiAgent 的上一级）
+        # local.py 在 backend/app/agent/tools/storage/providers/ 下
+        # 6个parent -> backend/，7个parent -> AiAgent/，8个parent -> E:/Projects/
+        module_path = Path(__file__).resolve()
+        backend_dir = module_path.parents[5]  # 6个parent -> backend/
+        # 项目根目录 = backend 的上两级（AiAgent/ -> Projects/）
+        project_root = backend_dir.parent.parent
+        default_tasks = project_root / "tasks"
+
+        storage_path = os.environ.get("LOCAL_STORAGE_PATH")
+        if storage_path:
+            if os.path.isabs(storage_path):
+                self.base_path = Path(storage_path)
+            else:
+                # 相对路径基于 backend 目录
+                self.base_path = backend_dir / storage_path
         else:
-            self.base_path = Path(default_path)
-            self.backend_dir = Path(__file__).resolve().parent.parent.parent.parent.parent.parent
+            self.base_path = default_tasks
+
+        self.backend_dir = backend_dir
 
         # 安全检查：确保 base_path 在 backend 目录之外
         self._validate_path()
@@ -41,12 +51,18 @@ class LocalStorageProvider(BaseStorageProvider):
         resolved_base = self.base_path.resolve()
         resolved_backend = self.backend_dir.resolve()
         try:
+            # 检查 base_path 是否在 backend 目录内
             resolved_base.relative_to(resolved_backend)
+            # 如果没抛异常，说明 base_path 在 backend 内，禁止
             raise ValueError(
-                f"安全检查失败：存储路径 {self.base_path} 不能在 backend 目录 {self.backend_dir} 内。"
-                "请设置环境变量 LOCAL_STORAGE_PATH 为 backend 目录之外的路径。"
+                f"安全检查失败：存储路径 {self.base_path} 在 backend 目录 {self.backend_dir} 内。"
+                "请设置环境变量 LOCAL_STORAGE_PATH 为 backend 目录之外的路径，或设置为相对路径如 'tasks'。"
             )
-        except ValueError:
+        except ValueError as e:
+            # 检查是否是上面的主动抛出（禁止），还是真的在外（允许）
+            if "安全检查失败" in str(e):
+                raise
+            # ValueError 说明 base_path 不在 backend 内，验证通过
             pass
 
     def _safe_path(self, folder: str, filename: str) -> Path:

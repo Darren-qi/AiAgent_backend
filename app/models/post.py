@@ -2,6 +2,9 @@
 文章模型模块
 
 定义文章相关的数据库模型。
+
+数据库表:
+    - posts: 文章表
 """
 
 from datetime import datetime
@@ -33,10 +36,36 @@ class PostVisibility(str, Enum):
 
 class Post(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
     """
-    文章模型
+    文章模型表 (posts)
 
-    包含文章的全部信息。
+    存储文章的完整信息。
     支持软删除、草稿/发布状态、多种可见性。
+
+    主要字段:
+        - title: 文章标题
+        - content: 文章内容 (支持富文本或 Markdown)
+        - summary: 文章摘要
+        - category: 分类
+        - tags: 标签 (逗号分隔)
+        - status: 状态 (draft/published/archived)
+        - visibility: 可见性 (public/private/members_only)
+        - author_id: 作者ID (外键)
+        - slug: URL Slug (SEO)
+        - view_count: 阅读量
+        - like_count: 点赞数
+        - comment_count: 评论数
+        - published_at: 发布时间
+
+    使用场景:
+        - 文章管理
+        - 内容发布
+        - SEO 优化
+        - 阅读统计
+
+    生命周期:
+        1. draft: 草稿状态，未发布
+        2. published: 已发布，可公开访问
+        3. archived: 已归档，保留但不展示
     """
 
     __tablename__ = "posts"

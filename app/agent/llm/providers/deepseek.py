@@ -37,6 +37,7 @@ class DeepSeekProvider(BaseLLMProvider):
             "model": self.config.name,
             "messages": messages,
             "temperature": request.temperature,
+            "timeout": httpx.Timeout(request.timeout or 60.0, connect=10.0),  # 读取超时 + 连接超时
         }
 
         if request.max_tokens:

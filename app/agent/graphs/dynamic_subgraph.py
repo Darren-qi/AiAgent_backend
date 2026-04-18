@@ -243,29 +243,40 @@ class DynamicSubgraph:
     ) -> Dict[str, Any]:
         """执行单个步骤"""
         action = step.get("action", "unknown")
-        params = step.get("params", {})
+        params = step.get("params", {}).copy()
+
+        # 传递 context 中的 task_path
+        if context and context.get("task_path"):
+            params["task_path"] = context.get("task_path")
 
         try:
-            from app.agent.skills.registry import registry
-            skill = registry.get(action)
-
-            if skill:
-                result = await skill.execute(**params)
-                return {
-                    "success": result.success,
-                    "data": result.data,
-                    "error": result.error,
-                    "action": action,
-                    "step": step.get("step"),
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": f"未找到 Skill: {action}",
-                    "action": action,
-                    "step": step.get("step"),
-                }
+            from app.agent.skills.core.progressive_loader import get_loader
+            loader = get_loader()
+            result = await loader.execute(action, params)
+            return {
+                "success": result.success,
+                "data": result.data,
+                "error": result.error,
+                "action": action,
+                "step": step.get("step"),
+            }
         except Exception as e:
+            # 备用：尝试从旧 registry 执行
+            try:
+                from app.agent.skills.registry import registry
+                skill = registry.get(action)
+                if skill:
+                    result = await skill.execute(**params)
+                    return {
+                        "success": result.success,
+                        "data": result.data,
+                        "error": result.error,
+                        "action": action,
+                        "step": step.get("step"),
+                    }
+            except:
+                pass
+
             logger.exception(f"[DynamicSubgraph] 步骤执行异常: {action}")
             return {
                 "success": False,

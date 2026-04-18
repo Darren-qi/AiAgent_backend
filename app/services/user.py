@@ -41,12 +41,16 @@ class UserService:
 
     async def create_user(self, user_data: UserCreate) -> User:
         """创建新用户"""
+        from datetime import datetime, timezone
         hashed_password = hash_password(user_data.password)
+        now = datetime.now(timezone.utc)
         user = User(
             username=user_data.username,
             email=user_data.email,
             hashed_password=hashed_password,
             nickname=user_data.nickname,
+            created_at=now,
+            updated_at=now,
         )
         self.db.add(user)
         await self.db.commit()

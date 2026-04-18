@@ -6,19 +6,9 @@ import logging
 from typing import Dict, Any, Optional, List
 
 from app.agent.agents.base import BaseAgent, AgentType, AgentResult
+from app.agent.skills import get_loader
 
 logger = logging.getLogger(__name__)
-
-
-AVAILABLE_SKILLS = {
-    "http_client": {"description": "发起 HTTP 请求", "params": ["url", "method", "timeout"]},
-    "code_generator": {"description": "生成代码", "params": ["language", "requirements"]},
-    "data_processor": {"description": "数据处理", "params": ["operation", "input_data"]},
-    "file_operations": {"description": "文件操作", "params": ["operation", "path"]},
-    "notification": {"description": "发送通知", "params": ["channel", "recipient", "content"]},
-    "search": {"description": "信息搜索", "params": ["query", "limit"]},
-    "general_response": {"description": "通用响应", "params": []},
-}
 
 
 class PlannerAgent(BaseAgent):
@@ -27,6 +17,7 @@ class PlannerAgent(BaseAgent):
     def __init__(self, **kwargs):
         super().__init__(agent_type=AgentType.PLANNER, name="PlannerAgent", **kwargs)
         self.max_subtasks = 10
+        self._skill_loader = get_loader()
 
     def _get_default_system_prompt(self) -> str:
         return """你是一个专业的任务规划专家。你的职责是将复杂任务分解为可执行的子任务步骤。
@@ -102,11 +93,23 @@ class PlannerAgent(BaseAgent):
             return AgentResult(success=False, error=str(e))
 
     def _build_skill_list(self) -> str:
-        """构建 Skill 清单"""
+        """构建 Skill 清单（从 SKILL.md 动态加载）"""
+        schemas = self._skill_loader.get_schemas()
+        if not schemas:
+            return "无可用技能"
+
         lines = []
-        for name, info in AVAILABLE_SKILLS.items():
-            params = ", ".join(info["params"])
-            lines.append(f"- {name}: {info['description']} | 参数: {params}")
+        for schema in schemas:
+            params = schema.get("parameters", {})
+            if isinstance(params, dict):
+                prop_names = list(params.get("properties", {}).keys())
+            elif isinstance(params, list):
+                prop_names = [p.get("name", "") for p in params]
+            else:
+                prop_names = []
+
+            params_str = ", ".join(prop_names) if prop_names else "无"
+            lines.append(f"- {schema['name']}: {schema['description']} | 参数: {params_str}")
         return "\n".join(lines)
 
     def _parse_plan(self, response: str) -> Optional[Dict[str, Any]]:

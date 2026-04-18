@@ -1,19 +1,24 @@
-"""Skill 系统模块"""
+"""Skill 系统模块
 
-from app.agent.skills.base import BaseSkill, SkillResult
-from app.agent.skills.registry import SkillRegistry, registry
-from app.agent.skills.loader import SkillLoader, load_builtin_skills
+支持两种结构：
+1. 新结构（渐进式）：skills/<name>/SKILL.md + skill.py
+2. 旧结构（兼容）：skills/builtin/*.py（暂时保留）
+"""
 
-# 加载内置 Skill
-_builtin_skills = load_builtin_skills()
-for name, skill in _builtin_skills.items():
-    registry.register(skill)
+from app.agent.skills.core.base_skill import BaseSkill, SkillResult
+from app.agent.skills.core.progressive_loader import (
+    ProgressiveSkillLoader,
+    SkillMetadata,
+    get_loader,
+    bootstrap,
+)
 
 __all__ = [
+    # 新核心
     "BaseSkill",
     "SkillResult",
-    "SkillRegistry",
-    "SkillLoader",
-    "registry",
-    "load_builtin_skills",
+    "ProgressiveSkillLoader",
+    "SkillMetadata",
+    "get_loader",
+    "bootstrap",
 ]

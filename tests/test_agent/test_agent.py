@@ -28,6 +28,24 @@ class TestAgentGraph:
         )
         assert result is not None
 
+    @pytest.mark.asyncio
+    async def test_execute_creates_flask_blog(self):
+        """测试创建 Flask 博客项目任务"""
+        graph = AgentGraph()
+        result = await graph.execute(
+            task="创建一个Flask博客项目",
+            context={"user_id": "test_user", "session_id": "test_flask_session"}
+        )
+        # 必须包含 success 字段
+        assert "success" in result
+        # 必须有 result 字段，不能是 None
+        assert result.get("result") is not None, "result 不应为 None"
+        # 不应该返回"任务已完成，但没有返回结果"
+        result_str = str(result.get("result", ""))
+        assert "任务已完成，但没有返回结果" not in result_str, f"result 内容异常: {result_str}"
+        # 应该返回有意义的结果内容
+        assert len(result_str) > 0, "result 不应为空字符串"
+
 
 class TestMemoryManager:
     """记忆管理器测试"""
@@ -37,22 +55,24 @@ class TestMemoryManager:
         manager = MemoryManager(session_id="test_session")
         assert manager.session_id == "test_session"
 
-    def test_add_messages(self):
+    @pytest.mark.asyncio
+    async def test_add_messages(self):
         """测试添加消息"""
         manager = MemoryManager(session_id="test")
-        manager.add_user_message("你好")
-        manager.add_assistant_message("你好，有什么可以帮你的？")
+        await manager.add_user_message("你好")
+        await manager.add_assistant_message("你好，有什么可以帮你的？")
 
         history = manager.get_conversation_history()
         assert len(history) == 2
         assert history[0]["role"] == "user"
         assert history[1]["role"] == "assistant"
 
-    def test_get_context_for_llm(self):
+    @pytest.mark.asyncio
+    async def test_get_context_for_llm(self):
         """测试获取 LLM 上下文"""
         manager = MemoryManager(session_id="test")
-        manager.add_user_message("你好")
-        manager.add_assistant_message("你好！")
+        await manager.add_user_message("你好")
+        await manager.add_assistant_message("你好！")
 
         context = manager.get_context_for_llm()
         assert len(context) == 2

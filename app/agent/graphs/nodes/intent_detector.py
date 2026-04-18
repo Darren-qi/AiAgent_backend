@@ -97,6 +97,11 @@ class IntentDetector:
         self._keyword_fallback = KeywordIntentDetector()
         self._use_llm = True
         self._llm_fallback_threshold = 0.5  # LLM置信度低于此值时使用关键词
+        self._task_id: Optional[str] = None
+
+    def set_task_id(self, task_id: str) -> None:
+        """设置任务 ID，用于可取消的 LLM 调用"""
+        self._task_id = task_id
 
     @property
     def llm_factory(self) -> LLMFactory:
@@ -104,6 +109,12 @@ class IntentDetector:
         if self._llm_factory is None:
             self._llm_factory = LLMFactory.get_instance()
         return self._llm_factory
+
+    async def _llm_chat(self, messages: list, **kwargs):
+        """统一 LLM 调用方法，自动传递 task_id 以支持取消"""
+        if self._task_id:
+            kwargs["task_id"] = self._task_id
+        return await self.llm_factory.chat(messages, **kwargs)
 
     async def detect(self, task: str) -> Dict[str, Any]:
         """
@@ -127,7 +138,7 @@ class IntentDetector:
 
     async def _detect_with_llm(self, task: str) -> Dict[str, Any]:
         """使用 LLM 进行意图识别"""
-        response = await self.llm_factory.chat(
+        response = await self._llm_chat(
             messages=[
                 {"role": "user", "content": f"{self.INTENT_PROMPT}\n\n用户任务: {task}"}
             ],
@@ -148,7 +159,7 @@ class IntentDetector:
                 json_str = match.group(1)
                 result = json.loads(json_str)
             else:
-                print("意图数据解析失败，检查是否为标准JSON格式")
+                logger.debug("意图数据解析失败，检查是否为标准JSON格式")
 
             return self._normalize_intent_result(result)
         except json.JSONDecodeError:

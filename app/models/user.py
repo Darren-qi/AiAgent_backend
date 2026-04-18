@@ -3,6 +3,9 @@
 
 定义用户相关的数据库模型。
 包含普通用户模型。
+
+数据库表:
+    - users: 用户表
 """
 
 from datetime import datetime
@@ -34,10 +37,33 @@ class UserStatus(str, Enum):
 
 class User(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
     """
-    用户模型
+    用户模型表 (users)
 
-    包含用户的基本信息和认证相关字段。
+    存储用户的基本信息和认证相关字段。
     支持软删除和多种用户状态。
+
+    主要字段:
+        - username: 用户名 (唯一)
+        - email: 邮箱 (唯一)
+        - nickname: 昵称
+        - avatar: 头像 URL
+        - hashed_password: 密码哈希
+        - role: 用户角色 (user/admin/moderator)
+        - status: 用户状态 (active/inactive/banned)
+        - email_verified: 邮箱是否已验证
+        - login_failures: 连续登录失败次数
+        - last_login_at: 最后登录时间
+
+    使用场景:
+        - 用户认证
+        - 权限控制
+        - 用户管理
+
+    安全特性:
+        - 密码哈希存储 (不存储明文)
+        - 邮箱验证机制
+        - 登录失败锁定
+        - 软删除 (保留数据可恢复)
     """
 
     __tablename__ = "users"

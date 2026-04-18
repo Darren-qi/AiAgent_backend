@@ -1,6 +1,7 @@
 """LLM 工厂类"""
 
 import os
+import sys
 from typing import Dict, Any, Optional, Type
 
 try:
@@ -94,10 +95,12 @@ class LLMFactory:
         messages: list,
         model: Optional[str] = None,
         strategy: Optional[str] = None,
+        task_id: Optional[str] = None,
         **kwargs
     ) -> LLMResponse:
-        """发送聊天请求"""
+        """发送聊天请求（支持可取消）"""
         from app.agent.llm.types import ChatMessage
+        from app.agent.cancel_signal import cancellable_chat, cancel_signal
 
         chat_messages = [
             ChatMessage(role=m.get("role", "user"), content=m.get("content", ""))
@@ -129,9 +132,29 @@ class LLMFactory:
             raise RuntimeError(f"预算不足，当前状态: {status.value}")
 
         provider = self.get_provider(selected_model.provider)
-        response = await provider.chat(request)
 
-        await self.budget_manager.record_usage(response.cost)
+        # 获取超时时间（从 request 中或使用默认值）
+        # 注意：LLM 调用可能需要较长时间，设置为 120 秒
+        timeout = getattr(request, 'timeout', None) or 120.0
+
+        # 捕获 budget_manager 引用，用于工厂函数
+        budget_manager = self.budget_manager
+
+        async def _do_chat():
+            nonlocal provider, request
+            result = await provider.chat(request)
+            await budget_manager.record_usage(result.cost)
+            return result
+
+        # 如果有 task_id 且未被取消，使用可取消的调用
+        if task_id and not cancel_signal.is_cancelled(task_id):
+            response = await cancellable_chat(
+                coro_factory=_do_chat,
+                task_id=task_id,
+                timeout=timeout,
+            )
+        else:
+            response = await _do_chat()
 
         return response
 

@@ -1,7 +1,10 @@
 """记忆管理器"""
 
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, Optional, List
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.agent.memory.pgsaver import PostgresSaver
 from app.agent.memory.short_term import ShortTermMemory
 from app.agent.memory.long_term import LongTermMemory
 
@@ -9,22 +12,39 @@ from app.agent.memory.long_term import LongTermMemory
 class MemoryManager:
     """记忆管理器 - 统一管理短期和长期记忆"""
 
-    def __init__(self, session_id: str):
+    def __init__(
+        self,
+        session_id: str,
+        db_session: Optional[AsyncSession] = None,
+    ):
         self.session_id = session_id
-        self.short_term = ShortTermMemory()
-        self.long_term = LongTermMemory()
+        self.db_saver = PostgresSaver(db_session) if db_session else None
 
-    def add_user_message(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
-        """添加用户消息"""
-        self.short_term.add_message("user", content, metadata)
+        self.short_term = ShortTermMemory(
+            db_saver=self.db_saver,
+            session_id=session_id,
+        )
+        self.long_term = LongTermMemory(
+            db_saver=self.db_saver,
+            session_id=session_id,
+        )
 
-    def add_assistant_message(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
-        """添加助手消息"""
-        self.short_term.add_message("assistant", content, metadata)
+    async def initialize(self) -> None:
+        """初始化：从数据库加载已有数据到内存"""
+        await self.short_term.load_from_db()
+        await self.long_term.load_from_db()
 
-    def add_system_message(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
-        """添加系统消息"""
-        self.short_term.add_message("system", content, metadata)
+    async def add_user_message(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """添加用户消息（异步保存到数据库）"""
+        await self.short_term.add_message("user", content, metadata)
+
+    async def add_assistant_message(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """添加助手消息（异步保存到数据库）"""
+        await self.short_term.add_message("assistant", content, metadata)
+
+    async def add_system_message(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """添加系统消息（异步保存到数据库）"""
+        await self.short_term.add_message("system", content, metadata)
 
     def get_conversation_history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """获取对话历史"""
@@ -62,3 +82,24 @@ class MemoryManager:
         """获取用于 LLM 的上下文"""
         messages = self.get_conversation_history(limit=max_messages)
         return [{"role": m["role"], "content": m["content"]} for m in messages]
+
+    async def save_all_to_db(self) -> None:
+        """手动保存所有记忆到数据库"""
+        if not self.db_saver:
+            return
+
+        context = {
+            "messages": self.short_term.get_messages(),
+            "facts": await self.long_term.semantic.get_all(),
+            "episodes": [
+                {"id": e["id"], "event": e["event"]}
+                for e in self.long_term.episodic.get_recent(limit=100)
+            ],
+            "working": await self.short_term.working.get_all(),
+        }
+
+        await self.db_saver.save_session_context(self.session_id, context)
+
+    async def load_from_db(self) -> None:
+        """从数据库加载所有记忆"""
+        await self.initialize()
