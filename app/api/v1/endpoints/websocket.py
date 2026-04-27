@@ -2,8 +2,8 @@
 
 from typing import Dict, Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from app.agent.graphs.main_graph import AgentGraph
 from app.agent.memory.manager import MemoryManager
+from app.agent.autogen.session_manager import session_manager
 import json
 
 router = APIRouter()
@@ -71,22 +71,27 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             if memory_manager:
                 await memory_manager.add_user_message(task)
 
-            graph = AgentGraph()
+            events = []
+
+            def on_event(event_type: str, data: Dict[str, Any]):
+                events.append({"type": event_type, "data": data})
 
             try:
-                result = await graph.execute(
+                result = await session_manager.execute(
+                    session_id=session_id,
                     task=task,
-                    context={**context, "session_id": session_id}
+                    context={**context, "session_id": session_id},
+                    on_event=on_event,
                 )
 
                 if memory_manager:
-                    await memory_manager.add_assistant_message(str(result.get("result", "")))
+                    await memory_manager.add_assistant_message(str(result.get("summary", "")))
 
                 await websocket.send_json({
                     "type": "result",
                     "success": result.get("success", False),
                     "result": result,
-                    "intent": result.get("intent"),
+                    "events": events,
                 })
 
             except Exception as e:

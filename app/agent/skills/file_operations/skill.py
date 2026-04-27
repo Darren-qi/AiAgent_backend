@@ -102,9 +102,9 @@ class FileOperationsSkill(BaseSkill):
     """文件操作 Skill"""
 
     DEFAULT_PARAMETERS = [
-        {"name": "operation", "type": "string", "required": True, "description": "操作类型，可选值: write(写文件), create(创建项目目录), read(读文件), list(列目录), delete(删除文件). 注意: 不要使用 create_directory/create_file/mkdir 等无效值！"},
+        {"name": "operation", "type": "string", "required": True, "description": "操作类型，可选值: write(写文件), create(创建项目目录), read(读文件), list(列目录), delete(删除文件), update(增量更新)。注意: 不要使用 create_directory/create_file/mkdir 等无效值！"},
         {"name": "path", "type": "string", "required": True, "description": "文件路径"},
-        {"name": "content", "type": "string", "required": False, "description": "写入内容（write/create操作时需要）"},
+        {"name": "content", "type": "string", "required": False, "description": "写入内容（write/create/update操作时需要）"},
         {"name": "encoding", "type": "string", "required": False, "description": "文件编码", "default": "utf-8"},
     ]
 
@@ -183,10 +183,12 @@ class FileOperationsSkill(BaseSkill):
         "create_file": "write",
         "new_file": "write",
         "add_file": "write",
-        # 编辑文件
-        "edit_file": "write",
-        "modify_file": "write",
-        "update_file": "write",
+        # 编辑文件（增量更新）
+        "edit_file": "update",
+        "modify_file": "update",
+        "update_file": "update",
+        "patch": "update",
+        "increment_update": "update",
         # 读取文件
         "read_file": "read",
         "file_read": "read",
@@ -226,6 +228,7 @@ class FileOperationsSkill(BaseSkill):
             "read": "read_file",
             "list": "list_dir",
             "delete": "delete_file",
+            "update": "patch_file",
         }
         friendly_action = operation_names.get(operation, "file_operations")
 
@@ -265,8 +268,16 @@ class FileOperationsSkill(BaseSkill):
             result.metadata["friendly_action"] = friendly_action
             result.metadata["operation"] = "delete_file"
             return result
+        elif operation == "update":
+            if not file_path:
+                return SkillResult(success=False, error="缺少 path 参数")
+            result = await self._update_file(file_path, content, encoding, task_path, session_id)
+            result.metadata = result.metadata or {}
+            result.metadata["friendly_action"] = friendly_action
+            result.metadata["operation"] = "patch_file"
+            return result
         else:
-            valid_ops = ", ".join(sorted(self._OPERATION_ALIASES.keys()) + ["write", "create", "read", "list", "delete"])
+            valid_ops = ", ".join(sorted(set(self._OPERATION_ALIASES.keys()) + ["write", "create", "read", "list", "delete", "update"]))
             return SkillResult(
                 success=False,
                 error=f"不支持的操作: {operation}，有效操作: {valid_ops}",
@@ -609,9 +620,18 @@ class FileOperationsSkill(BaseSkill):
         # 尝试解析路径（处理相对路径和项目内路径）
         resolved_path = file_path
         if not Path(file_path).is_absolute():
-            # 如果有项目根目录，使用项目目录
+            # 如果有项目根目录，检查 file_path 是否已包含项目根目录
             if project_root:
-                resolved_path = str(self._tasks_dir / project_root / file_path)
+                # 如果 file_path 以 project_root 开头，则认为是相对于 tasks 目录的路径
+                # 例如：file_path = "flask_blog_1234567890/app.py", project_root = "flask_blog_1234567890"
+                # 应该解析为 tasks/flask_blog_1234567890/app.py
+                if file_path.startswith(project_root):
+                    # 去除开头的 project_root 部分
+                    rel_path = file_path[len(project_root):].lstrip('/\\')
+                    resolved_path = str(self._tasks_dir / project_root / rel_path)
+                else:
+                    # file_path 不包含 project_root，认为是相对于项目目录的路径
+                    resolved_path = str(self._tasks_dir / project_root / file_path)
             else:
                 resolved_path = str(self._tasks_dir / file_path)
 
@@ -707,6 +727,177 @@ class FileOperationsSkill(BaseSkill):
         except Exception as e:
             logger.error(f"[FileOps] 删除文件失败: {e}")
             return SkillResult(success=False, error=str(e))
+
+    async def _update_file(self, file_path: str, content: str, encoding: str, task_path: Optional[str] = None, session_id: Optional[str] = None) -> SkillResult:
+        """
+        增量更新文件（支持 diff 格式）
+
+        支持的更新模式：
+        1. 完整内容替换：如果 content 不包含 <<<<<<< 和 >>>>>>，则直接替换整个文件
+        2. Diff 格式更新：如果 content 包含 <<<<<<< HEAD 和 ======= 和 >>>>>>>，
+           则解析 diff 并应用变更
+
+        Diff 格式示例：
+        <<<<<<< HEAD
+        # 现有内容
+        =======
+        # 新增/修改内容
+        >>>>>>>
+        """
+        try:
+            # 1. 确定文件路径（与 _write_file 相同逻辑）
+            project_folder = None
+            rel_write_path = file_path
+
+            if task_path:
+                project_folder = task_path
+                match = re.match(r'^([a-zA-Z_][a-zA-Z0-9_]*)_\d+$', task_path)
+                project_name = match.group(1) if match else None
+
+                clean_path = file_path
+                if clean_path.startswith('./'):
+                    clean_path = clean_path[2:]
+                if clean_path.startswith('../'):
+                    clean_path = clean_path[3:]
+
+                if project_name:
+                    prefixes = [
+                        f"{project_name}_project/",
+                        f"{project_name}-project/",
+                        f"{project_name}_",
+                        f"{project_name}/",
+                    ]
+                    matched = False
+                    for prefix in prefixes:
+                        if clean_path.startswith(prefix):
+                            rel_write_path = clean_path[len(prefix):]
+                            matched = True
+                            break
+                    if not matched and clean_path.startswith(project_folder):
+                        rel_write_path = clean_path[len(project_folder):].lstrip('/\\')
+                        matched = True
+
+            elif self._allowed_project_root:
+                project_folder = self._allowed_project_root
+
+            # 2. 构建最终路径
+            if project_folder:
+                target_dir = self._tasks_dir / project_folder
+                path = target_dir / rel_write_path if rel_write_path != "." else target_dir
+                abs_path = str(path.resolve())
+
+                check_root = task_path or self._allowed_project_root
+                if check_root:
+                    check_dir = str((self._tasks_dir / check_root).resolve())
+                    if not abs_path.startswith(check_dir):
+                        return SkillResult(
+                            success=False,
+                            error=f"错误：路径 '{abs_path}' 不在允许的目录 '{check_dir}' 范围内。"
+                        )
+            else:
+                path = Path(file_path)
+                if path.is_absolute():
+                    abs_path = file_path
+                else:
+                    path = self._tasks_dir / file_path
+                    abs_path = str(path.resolve())
+
+            # 3. 安全检查
+            if not self._is_safe_path(abs_path):
+                return SkillResult(success=False, error=f"安全检查失败：禁止写入路径 {abs_path}")
+
+            if not path.exists():
+                return SkillResult(success=False, error=f"文件不存在: {file_path}")
+
+            # 4. 读取现有内容
+            existing_content = path.read_text(encoding=encoding)
+
+            # 5. 解析 diff 格式并应用
+            new_content = self._apply_diff(existing_content, content)
+
+            # 6. 写入更新后的内容
+            path.write_text(new_content, encoding=encoding)
+            logger.info(f"[FileOps] 增量更新文件: {path}")
+
+            # 7. 记录文件到数据库
+            if session_id:
+                try:
+                    from app.agent.tools.session_context import add_session_file
+                    await add_session_file(
+                        session_id=session_id,
+                        file_path=rel_write_path,
+                        file_type="dependency",
+                        absolute_path=str(path.resolve()),
+                        size=len(new_content),
+                        language=None,
+                        is_entrypoint=False,
+                    )
+                except Exception as e:
+                    logger.debug(f"[FileOps] 记录文件失败: {e}")
+
+            return SkillResult(
+                success=True,
+                data={"path": str(path), "size": len(new_content), "updated": True},
+                metadata={"operation": "update", "task_path": project_folder}
+            )
+        except Exception as e:
+            logger.error(f"[FileOps] 增量更新文件失败: {e}")
+            return SkillResult(success=False, error=str(e))
+
+    def _apply_diff(self, existing_content: str, diff_content: str) -> str:
+        """
+        应用 diff 格式的更新
+
+        支持的 diff 标记：
+        - <<<<<<< HEAD: 现有内容开始
+        - =======: 分隔现有内容和新内容
+        - >>>>>>>: 新内容结束
+
+        如果不包含 diff 标记，则直接返回 diff_content（全量替换）
+        """
+        # 检查是否包含 diff 标记
+        if '<<<<<<< HEAD' not in diff_content or '=======' not in diff_content or '>>>>>>>' not in diff_content:
+            # 没有 diff 标记，直接替换
+            return diff_content
+
+        # 解析 diff 格式
+        lines = diff_content.split('\n')
+        result_lines = []
+        i = 0
+
+        while i < len(lines):
+            line = lines[i]
+
+            if line.startswith('<<<<<<<'):
+                # 找到现有内容的开始，查找 ======= 分隔符
+                i += 1
+                existing_lines = []
+                new_lines = []
+
+                while i < len(lines):
+                    curr = lines[i]
+                    if curr.startswith('======='):
+                        i += 1
+                        break
+                    existing_lines.append(curr)
+                    i += 1
+
+                # 收集新内容
+                while i < len(lines):
+                    curr = lines[i]
+                    if curr.startswith('>>>>>>>'):
+                        i += 1
+                        break
+                    new_lines.append(curr)
+                    i += 1
+
+                # 使用新内容替换
+                result_lines.extend(new_lines)
+            else:
+                result_lines.append(line)
+                i += 1
+
+        return '\n'.join(result_lines)
 
 
 # 导出 Skill 实例

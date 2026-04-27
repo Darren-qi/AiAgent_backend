@@ -5,7 +5,7 @@ from fastapi import APIRouter
 router = APIRouter()
 
 
-@router.get("/health")
+@router.get("/")
 async def health_check() -> dict:
     """健康检查"""
     return {
@@ -14,7 +14,7 @@ async def health_check() -> dict:
     }
 
 
-@router.get("/health/detailed")
+@router.get("/detailed")
 async def detailed_health_check() -> dict:
     """详细健康检查"""
     try:

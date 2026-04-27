@@ -166,11 +166,11 @@ class SessionModel(Base, IDMixin, TimestampMixin):
         comment="会话ID",
     )
 
-    # 用户 ID
-    user_id: Mapped[int] = mapped_column(
+    # 用户 ID (可为空，支持匿名会话)
+    user_id: Mapped[Optional[int]] = mapped_column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
         comment="用户ID",
     )

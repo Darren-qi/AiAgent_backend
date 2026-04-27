@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     # 服务器配置
     # =========================================
     host: str = Field(default="0.0.0.0", description="服务器主机")
-    port: int = Field(default=8000, ge=1, le=65535, description="服务器端口")
+    port: int = Field(default=8004, ge=1, le=65535, description="服务器端口")
 
     # =========================================
     # 数据库配置

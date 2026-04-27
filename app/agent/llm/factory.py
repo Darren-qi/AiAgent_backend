@@ -107,10 +107,14 @@ class LLMFactory:
             for m in messages
         ]
 
+        # 获取超时时间，默认为 120 秒
+        timeout = kwargs.pop('timeout', 120.0)
+
         request = ChatRequest(
             messages=chat_messages,
             model=model,
-            **{k: v for k, v in kwargs.items() if k not in ("model",)}
+            timeout=timeout,
+            **kwargs
         )
 
         selected_model = None
@@ -132,10 +136,6 @@ class LLMFactory:
             raise RuntimeError(f"预算不足，当前状态: {status.value}")
 
         provider = self.get_provider(selected_model.provider)
-
-        # 获取超时时间（从 request 中或使用默认值）
-        # 注意：LLM 调用可能需要较长时间，设置为 120 秒
-        timeout = getattr(request, 'timeout', None) or 120.0
 
         # 捕获 budget_manager 引用，用于工厂函数
         budget_manager = self.budget_manager

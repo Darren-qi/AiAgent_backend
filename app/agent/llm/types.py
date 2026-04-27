@@ -80,4 +80,4 @@ class ChatRequest:
     stream: bool = False
     tools: Optional[List[Dict[str, Any]]] = None
     user: Optional[str] = None
-    timeout: Optional[float] = 60.0  # 请求超时时间（秒）
+    timeout: Optional[float] = 120.0  # 请求超时时间（秒）

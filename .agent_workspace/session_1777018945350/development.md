@@ -1,0 +1,13 @@
+```
+project_create("calculator_app")
+```
+
+```
+file_write(path="calculator.py", content="# calculator.py - 简单四则运算计算器\n\"\"\"\n一个命令行四则运算计算器，支持加、减、乘、除。\n\"\"\"\n\n\ndef add(a: float, b: float) -> float:\n    \"\"\"加法\"\"\"\n    return a + b\n\n\ndef subtract(a: float, b: float) -> float:\n    \"\"\"减法\"\"\"\n    return a - b\n\n\ndef multiply(a: float, b: float) -> float:\n    \"\"\"乘法\"\"\"\n    return a * b\n\n\ndef divide(a: float, b: float) -> float:\n    \"\"\"除法，除数为0时抛出异常\"\"\"\n    if b == 0:\n        raise ValueError(\"除数不能为0！\")\n    return a / b\n\n\ndef display_menu():\n    \"\"\"显示功能菜单\"\"\"\n    print(\"\\n\" + \"=\" * 30)\n    print(\"        简单计算器\")\n    print(\"=\" * 30)\n    print(\"1. 加法 (+)\")\n    print(\"2. 减法 (-)\")\n    print(\"3. 乘法 (*)\")\n    print(\"4. 除法 (/)\")\n    print(\"5. 退出\")\n    print(\"=\" * 30)\n\n\ndef get_choice() -> int:\n    \"\"\"获取用户菜单选择\"\"\"\n    while True:\n        try:\n            choice = int(input(\"请输入您的选择 (1-5): \"))\n            if 1 <= choice <= 5:\n                return choice\n            else:\n                print(\"错误：请输入1到5之间的数字！\")\n        except ValueError:\n            print(\"错误：请输入有效的数字！\")\n\n\ndef get_numbers() -> tuple[float, float]:\n    \"\"\"获取用户输入的两个数字\"\"\"\n    while True:\n        try:\n            a = float(input(\"请输入第一个数字: \"))\n            b = float(input(\"请输入第二个数字: \"))\n            return a, b\n        except ValueError:\n            print(\"错误：请输入有效的数字！\")\n\n\ndef main():\n    \"\"\"主程序入口\"\"\"\n    print(\"欢迎使用简单计算器！\")\n    \n    while True:\n        display_menu()\n        choice = get_choice()\n        \n        if choice == 5:\n            print(\"感谢使用，再见！\")\n            break\n        \n        print(\"\\n请输入两个数字：\")\n        a, b = get_numbers()\n        \n        if choice == 1:\n            result = add(a, b)\n            print(f\"\\n结果: {a} + {b} = {result}\")\n        elif choice == 2:\n            result = subtract(a, b)\n            print(f\"\\n结果: {a} - {b} = {result}\")\n        elif choice == 3:\n            result = multiply(a, b)\n            print(f\"\\n结果: {a} * {b} = {result}\")\n        elif choice == 4:\n            try:\n                result = divide(a, b)\n                print(f\"\\n结果: {a} / {b} = {result}\")\n            except ValueError as e:\n                print(f\"\\n错误：{e}\")\n\n\nif __name__ == \"__main__\":\n    main()\n")
+```
+
+STAGE_DONE: development
+
+【工具执行结果】
+✅ 创建项目 'calculator_app'
+📄 创建文件 'calculator.py'
