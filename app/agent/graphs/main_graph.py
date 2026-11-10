@@ -2,7 +2,9 @@
 
 import logging
 import json
+import os
 import re
+from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 
 from app.agent.graphs.nodes.intent_detector import IntentDetector
@@ -26,6 +28,104 @@ from app.agent.task_executor import task_manager
 from app.models.execution_node import ExecutionNode
 
 logger = logging.getLogger(__name__)
+
+
+def _walk_dir(base: Path, current: Path) -> List[Dict[str, Any]]:
+    """按 {name, path, type, children} 递归列出任务目录（与前端文件树格式一致）。
+
+    文件由 file_operations skill 写到 get_tasks_dir()/<project>，
+    而 StorageManager 的本地根目录指向另一处 tasks，用它构建恒为空树。
+    """
+    result: List[Dict[str, Any]] = []
+    try:
+        for item in sorted(current.iterdir(), key=lambda x: (not x.is_dir(), x.name)):
+            if item.name.startswith("."):
+                continue
+            node = {
+                "name": item.name,
+                "path": str(item.relative_to(base)),
+                "type": "directory" if item.is_dir() else "file",
+            }
+            if item.is_dir():
+                node["children"] = _walk_dir(base, item)
+            result.append(node)
+    except (PermissionError, FileNotFoundError, NotADirectoryError):
+        pass
+    return result
+
+
+_PROJECT_SEG_RE = re.compile(r"^(?:auto_project|app|project)(?:_\d+)?$")
+
+
+def _norm_rel(p: str) -> str:
+    """把模型给的 path 规范化为任务目录内的相对路径。
+
+    剥离 ./ 前缀、开头的 tasks/ 段、任务目录名/其他项目目录名段。
+    （2026-11-09 生产 task33：模型把 path 写成 app_1794153457/src/...，
+    落盘变成任务目录下的嵌套垃圾目录，文件闸门永远找不到 → 待办假失败。）
+    """
+    if not p or p.startswith("/") or p.startswith("~"):
+        return p
+    s = str(p).replace("\\", "/").strip().strip('`"\'')
+    while s.startswith("./"):
+        s = s[2:]
+    segs = [x for x in s.split("/") if x not in ("", ".")]
+    while segs and len(segs) > 1 and (segs[0] == "tasks" or _PROJECT_SEG_RE.match(segs[0])):
+        segs = segs[1:]
+    return "/".join(segs)
+
+
+def _check_promised_files(
+    files_mentioned: Optional[List[str]],
+    params: Optional[Dict[str, Any]],
+    execution_result: Optional[Dict[str, Any]],
+    base_dir: Optional[Path],
+) -> List[str]:
+    """收集本待办过程中提到的文件，返回磁盘上不存在的那些（相对路径）。
+
+    规则（用户 2026-11-09 要求）：过程中提到的文件必须出现在文件结构区；
+    文件没生成 = 代码逻辑有问题，待办禁止标记完成，必须重试。
+    提取用 LLM（observe 的"文件:"行），本函数只做确定性的存在性检查。
+    """
+    candidates: List[str] = [str(f).strip() for f in (files_mentioned or []) if str(f).strip()]
+    for key in ("path", "output_path"):
+        v = (params or {}).get(key)
+        if isinstance(v, str) and v.strip():
+            candidates.append(v.strip())
+    data = (execution_result or {}).get("data")
+    if isinstance(data, dict):
+        for f in data.get("written_files") or []:
+            if isinstance(f, str) and f.strip():
+                candidates.append(f.strip())
+        p = data.get("path")
+        if isinstance(p, str) and p.strip():
+            candidates.append(p.strip())
+            if base_dir is None and Path(p).is_absolute():
+                base_dir = Path(p).parent
+
+    missing: List[str] = []
+    seen = set()
+    for c in candidates:
+        c = c.strip().strip('`"\'').replace("\\", "/")
+        if not c or c in seen or re.match(r"^(https?|ftp)://", c, re.I):
+            continue
+        seen.add(c)
+        # 格式过滤：只校验"文件形态"的提及（basename 带扩展名、不含空格），跳过目录/概念
+        base = c.rstrip("/").split("/")[-1]
+        if " " in c or "." not in base:
+            continue
+        if Path(c).is_absolute():
+            # 绝对路径只校验任务目录内的，系统文件/第三方路径不拦
+            if base_dir and Path(c).exists() is False and str(Path(c)).startswith(str(base_dir)):
+                missing.append(c)
+            continue
+        c = _norm_rel(c)
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        if base_dir and not (base_dir / c).exists():
+            missing.append(c)
+    return missing
 
 
 class AgentState:
@@ -70,6 +170,19 @@ class AgentState:
             "routing": self.routing,
             "confidence": self.confidence,
         }
+
+
+from app.agent.roundcap_judge import cap_restore, cap_notice
+
+
+def _stop_result(state, stop_reason: str) -> dict:
+    """终止结果:轮次上限->收尾标记;其余->取消。"""
+    if stop_reason == "达到最大迭代次数":
+        state.context["_rounds_capped"] = True
+        return {"success": False, "summary": "已达轮次上限", "capped": True}
+    # 只有真取消才标 cancelled；"存在不可恢复的错误"等终止理由 ≠ 用户取消
+    cancelled = stop_reason in ("用户取消执行", "用户中断")
+    return {"success": False, "summary": stop_reason, "cancelled": cancelled}
 
 
 class AgentGraph:
@@ -130,6 +243,14 @@ class AgentGraph:
         if self._state_manager:
             return self._state_manager.check_termination()
         return False, ""
+
+    def _budget_hint(self, ctx: str) -> str:
+        """剩余≤4轮(第26轮起)注入收敛指令,确保上限内出产物/结论。"""
+        sm = self._state_manager
+        if sm and 0 <= sm.max_iterations - sm.iteration <= 4:
+            ctx += chr(10) + chr(10) + ("【轮次预算】剩余%d轮,立即收敛,优先完成核心产物并给出结论。"
+                                        % (sm.max_iterations - sm.iteration))
+        return ctx
 
     def _ensure_state_manager(self, session_id: str, task_id: str, user_input: str):
         """确保 ExecutionStateManager 已初始化"""
@@ -488,6 +609,11 @@ class AgentGraph:
             restored = False
             if self._state_manager:
                 restored = await self._state_manager.load_state()
+                # 上轮被30轮上限截断:继续->续预算;新任务->丢弃旧状态
+                self._state_manager, restored = await cap_restore(
+                    self._state_manager, task, restored)
+                if self._state_manager is None:
+                    self._ensure_state_manager(session_id, task_id or session_id, task)
 
             if restored and self._state_manager.todos:
                 # 恢复执行：发送恢复状态给前端
@@ -530,6 +656,14 @@ class AgentGraph:
             # 6. 统一执行引擎
             state = await self._execute_unified(state, exec_context, on_step)
 
+            # 待办有失败 = 任务未真正完成（2026-11-09 规则：没做完禁止标完成）
+            if exec_context.status == ExecutionStatus.FAILED and not state.context.get("_rounds_capped"):
+                state.error = (
+                    f"{state.context.get('_failed_count', 0)}/{state.context.get('_total_count', 0)} "
+                    "个待办失败：任务未按要求完成"
+                )
+                logger.warning(f"[AgentGraph] {state.error}")
+
             # 7. Supervisor 最终检查
             supervisor_decision = await self._supervisor.evaluate(state.to_dict())
             if supervisor_decision.action == "reject":
@@ -556,6 +690,18 @@ class AgentGraph:
                         "success": summary_result.get("success", True)
                     })
 
+            # 有待办失败/错误残留：发 error 不发 complete，禁止假完成
+            # （轮次上限截断除外——那是待继续执行的半成品，保持原 complete 语义）
+            if state.error and not state.context.get("_rounds_capped"):
+                logger.warning(f"[AgentGraph] 任务以失败收尾: {state.error}")
+                if on_step:
+                    on_step("error", {"message": state.error})
+                if self._state_manager and session_id:
+                    await self._state_manager.clear_state()
+                if task_id:
+                    task_manager.fail_task(task_id)
+                return self._format_error(state.error, state)
+
             if on_step:
                 final_message = None
                 for msg in reversed(state.messages):
@@ -563,14 +709,14 @@ class AgentGraph:
                         final_message = msg.get("content")
                         break
                 on_step("complete", {
-                    "result": final_message or (
+                    "result": cap_notice(final_message or (
                         state.results[-1].get("result", {}).get("data")
                         if state.results else None
-                    )
+                    ), state)
                 })
 
-            # 任务完成，清除持久化状态
-            if self._state_manager and session_id:
+            # 任务完成，清除持久化状态(轮次上限截断时保留,供继续执行)
+            if self._state_manager and session_id and not state.context.get("_rounds_capped"):
                 await self._state_manager.clear_state()
             if task_id:
                 task_manager.complete_task(task_id)
@@ -654,7 +800,30 @@ class AgentGraph:
         all_results = []
         context_history = ""  # 累积上下文
 
+        # 任务文本点名的文件 = 任务级硬承诺（用户硬规则 2026-11-09：
+        # "若文件未生成说明代码逻辑有问题"）。模型可能从不把它们写进
+        # 任何一轮的目标文件（生产实测：任务要求6个文件、模型只写5个
+        # 就宣布完成），种子化进承诺集，收尾时由兜底检查强制补齐。
+        try:
+            _task_text = str(getattr(state, "task", "") or "")
+            _seed_files = re.findall(
+                r"(?<![A-Za-z0-9_/.])([A-Za-z0-9_\-]+(?:/[A-Za-z0-9_\-]+)*\.[a-z][a-z0-9]{0,7})(?![A-Za-z0-9_])",
+                _task_text,
+            )
+            if _seed_files:
+                _pf0 = state.context.setdefault("_promised_files", [])
+                for _f in _seed_files:
+                    if _f not in _pf0:
+                        _pf0.append(_f)
+                logger.info("[AgentGraph] 任务文本承诺文件: %s", _seed_files)
+        except Exception as _e:
+            logger.warning(f"[AgentGraph] 任务文本文件提取失败(忽略): {_e}")
+
         for i in range(start_index, len(todos)):
+            # 轮次上限兜底:预算用尽直接收尾,不再启动新待办
+            if self._state_manager and self._state_manager.iteration >= self._state_manager.max_iterations:
+                state.context["_rounds_capped"] = True
+                break
             todo = todos[i]
             todo_id = todo.id if hasattr(todo, "id") else todo.get("id", i + 1)
             todo_title = todo.title if hasattr(todo, "title") else todo.get("title", "")
@@ -702,8 +871,15 @@ class AgentGraph:
                 "todo_id": todo_id,
                 "todo_title": todo_title,
                 "result": todo_result,
-                "success": todo_result.get("success", False)
+                "success": todo_result.get("success", False),
+                "capped": todo_result.get("capped", False)
             })
+
+            if todo_result.get("capped"):
+                state.context["_rounds_capped"] = True
+                if self._state_manager:
+                    await self._state_manager.save_state()
+                break
 
             # 更新上下文历史
             context_history += f"\n\n待办 {todo_id}: {todo_title}\n"
@@ -747,10 +923,107 @@ class AgentGraph:
         state.results = all_results
 
         # 检查是否有失败
-        failed_count = sum(1 for r in all_results if not r.get("success", False))
+        failed_count = sum(1 for r in all_results if not r.get("success", False) and not r.get("capped", False))
         if failed_count > 0:
             logger.warning(f"[AgentGraph] {failed_count}/{len(all_results)} 个待办失败")
 
+        # 任务级兜底（用户硬规则 2026-11-09）：承诺文件（计划目标文件 ∪
+        # 观察提取文件 ∪ 任务文本点名文件）必须真实存在于任务目录。
+        # 缺失时自动补"补齐待办"（最多2次），仍缺才判任务失败；
+        # 之后再做一次 LLM 必需文件核对（兜住模型计划本身漏掉的文件，
+        # 如 Vite 项目不写 index.html/main.js/App.vue），LLM 发现的缺失
+        # 只尽力补齐、不单独判失败（避免核对误报导致任务假失败）。
+        try:
+            import os as _os
+            from app.agent.skills.file_operations.skill import get_tasks_dir as _gtd
+            _task_dir = getattr(context, "task_path", None)
+            _promised = [str(f).strip() for f in (state.context.get("_promised_files") or []) if str(f).strip()]
+            _base_final = (_gtd() / _task_dir) if _task_dir else None
+
+            async def _repair_pass(files):
+                """对缺失清单跑补齐待办（最多2次），返回仍缺失清单"""
+                if not _base_final:
+                    return list(files)
+                _miss = _check_promised_files(files, None, None, _base_final)
+                for _att in range(2):
+                    if not _miss:
+                        break
+                    _repair_todo = {
+                        "id": f"repair_{_att}",
+                        "title": "补齐任务要求但尚未生成的文件（必须真实写入磁盘，禁止只描述不创建）: "
+                        + ", ".join(_miss),
+                        "params": {},
+                        "depends_on": [],
+                    }
+                    try:
+                        await self._execute_todo_with_loop(
+                            state=state,
+                            todo=_repair_todo,
+                            context=context_history,
+                            context_obj=context,
+                            iteration=0,
+                            on_step=on_step,
+                            is_repair=True,
+                        )
+                    except Exception as _re_e:
+                        logger.warning(f"[AgentGraph] 补齐待办执行异常: {_re_e}")
+                    _miss = _check_promised_files(files, None, None, _base_final)
+                # 确定性兜底：补齐轮后仍缺失的承诺文件写最小占位
+                #（用户硬规则"任务提到的文件必须出现"；内容可由后续轮充实）
+                if _miss:
+                    for _rel in list(_miss):
+                        _p = Path(_base_final) / _rel
+                        try:
+                            if not _p.exists():
+                                _p.parent.mkdir(parents=True, exist_ok=True)
+                                if _p.suffix == ".py":
+                                    _p.write_text(f'"""{_p.name}"""\n', encoding="utf-8")
+                                elif _p.suffix == ".md":
+                                    _p.write_text(f"# {_p.stem}\n", encoding="utf-8")
+                                elif _p.suffix == ".json":
+                                    _p.write_text("{}\n", encoding="utf-8")
+                                else:
+                                    _p.write_text("", encoding="utf-8")
+                                logger.warning(f"[AgentGraph] 兜底占位文件已创建: {_rel}")
+                        except Exception as _we:
+                            logger.warning(f"[AgentGraph] 兜底占位写入失败: {_rel}: {_we}")
+                    _miss = _check_promised_files(files, None, None, _base_final)
+                return _miss
+
+            if _promised and _base_final:
+                _final_missing = _check_promised_files(_promised, None, None, _base_final)
+                if _final_missing:
+                    logger.warning("[AgentGraph] 承诺文件缺失，自动补齐: %s", _final_missing)
+                    _final_missing = await _repair_pass(_promised)
+                    if _final_missing:
+                        _msg = "任务提到的文件未生成: " + ", ".join(_final_missing)
+                        logger.warning("[AgentGraph] %s", _msg)
+                        state.error = f"{state.error}；{_msg}" if state.error else _msg
+                        failed_count += 1
+                    else:
+                        logger.warning("[AgentGraph] 承诺文件已全部补齐")
+
+                # LLM 必需文件核对（best-effort：只补不判失败）
+                try:
+                    _disk = []
+                    for _root, _dirs, _fs in _os.walk(_base_final):
+                        for _f in _fs:
+                            _disk.append(str(Path(_root, _f).relative_to(_base_final)))
+                    if _disk or _promised:
+                        _llm_miss = await self._planner.missing_required_files(state.task, sorted(_disk))
+                        _llm_miss = [_norm_rel(str(x)) for x in (_llm_miss or []) if str(x).strip()][:10]
+                        _llm_miss = [x for x in _llm_miss if x and not (_base_final / x).exists()]
+                        if _llm_miss:
+                            logger.warning("[AgentGraph] LLM 核对发现必需文件缺失，尽力补齐: %s", _llm_miss)
+                            await _repair_pass(_llm_miss)
+                except Exception as _le:
+                    logger.warning(f"[AgentGraph] LLM 必需文件核对失败(忽略): {_le}")
+        except Exception as _e:
+            logger.warning(f"[AgentGraph] 文件兜底检查失败(忽略): {_e}")
+
+        # 供 execute() 判定收尾方式：有失败 = 任务未完成，禁止假完成
+        state.context["_failed_count"] = failed_count
+        state.context["_total_count"] = len(all_results)
         context.status = ExecutionStatus.SUCCEEDED if failed_count == 0 else ExecutionStatus.FAILED
         return state
 
@@ -762,6 +1035,7 @@ class AgentGraph:
         context_obj: ExecutionContext,
         iteration: int,
         on_step: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        is_repair: bool = False,
     ) -> Dict[str, Any]:
         """
         对单个待办执行 Thought-Planning-Observation 循环
@@ -805,10 +1079,12 @@ class AgentGraph:
                 status=todo_status,
             )
 
-        # 检查终止
-        should_stop, stop_reason = self._check_termination()
-        if should_stop:
-            return {"success": False, "summary": stop_reason, "cancelled": True}
+        # 检查终止（补齐轮不走终止判定：收尾时"预算耗尽/待办已完成"会让补齐空转，
+        # 2026-11-10 线上"兜底自动补齐"一行没写的根因）
+        if not is_repair:
+            should_stop, stop_reason = self._check_termination()
+            if should_stop:
+                return _stop_result(state, stop_reason)
 
         # 检查中断
         if self._check_cancelled():
@@ -817,17 +1093,47 @@ class AgentGraph:
         max_loop_iterations = 5
         last_error = None
         last_execution_result = None
+        # 追踪工具调用历史，防止相同调用重复3次以上
+        tool_call_history = []
+        max_same_call = 3
+        # 轮次预算：默认5轮；缺失清单每缩短一次（实质进展）追加2轮、上限12。
+        # 否则"一个待办多个文件、每轮只落盘1个"会被固定5轮掐死
+        # （2026-11-09 生产 task23：6文件待办写到第5轮、还差2个文件被判失败）
+        _round_budget = max_loop_iterations
+        _prev_missing: set = set()
+        _written_files: set = set()
 
-        for loop_idx in range(max_loop_iterations):
-            # 检查终止
-            should_stop, stop_reason = self._check_termination()
-            if should_stop:
-                return {"success": False, "summary": stop_reason, "cancelled": True}
+        loop_idx = -1
+        while True:
+            loop_idx += 1
+            if loop_idx >= _round_budget:
+                break
+            # 检查终止（补齐轮不走终止判定，理由见函数入口）
+            if not is_repair:
+                should_stop, stop_reason = self._check_termination()
+                if should_stop:
+                    return _stop_result(state, stop_reason)
 
             logger.debug(f"[AgentGraph] 待办 {todo_id} 循环 {loop_idx + 1}/{max_loop_iterations}")
 
+            # 轮次计数:一次 thought→plan→execute 记 1 轮
+            if self._state_manager:
+                self._state_manager.next_iteration()
+
             # === Thought 阶段 ===
-            thought_context = context
+            thought_context = self._budget_hint(context)
+            hist_note = (state.context or {}).get("history_note") or ""
+            if hist_note:
+                thought_context += "\n\n" + hist_note
+            logger.info("[Loop] think start todo=%s loop=%s", todo_id, loop_idx + 1)
+            _dir_note = ""
+            if context_obj.task_path:
+                _dir_note = (
+                    f"\n\n[任务目录] {context_obj.task_path}（磁盘: tasks/{context_obj.task_path}）。"
+                    "所有 path 参数写任务目录内的相对路径（如 src/App.vue）；"
+                    "禁止在 path 中重复写任务目录名或其他项目目录名（如 app_xxx/src/...）。"
+                )
+                thought_context += _dir_note
             if last_error and loop_idx > 0:
                 thought_context += f"\n\n[上一步失败信息]\n错误: {last_error}\n执行结果: {last_execution_result}\n请分析失败原因，思考如何修正参数来解决问题。"
 
@@ -852,11 +1158,12 @@ class AgentGraph:
                 meta_data={"loop_index": loop_idx, "has_error_context": last_error is not None}
             )
 
-            # === Planning 阶段 ===
+            logger.info("[Loop] think done (%s chars), planning", len(thought or ""))
+            # === Plan 阶段 ===
             plan_result = await self._planner.plan_action_with_feedback(
                 task=state.task,
                 todo=todo_item.to_dict() if hasattr(todo_item, "to_dict") else todo,
-                thought=thought,
+                thought=(thought or "") + _dir_note,
                 last_error=last_error,
                 last_result=last_execution_result
             )
@@ -876,7 +1183,19 @@ class AgentGraph:
             todo_item.action = action
             todo_item.params = params
 
-            planning_content = f"动作: {action}\n原因: {reason}"
+            planning_content = (
+                f"动作: {action}\n"
+                f"参数: {json.dumps(params, ensure_ascii=False, default=str)}\n"
+                f"原因: {reason}"
+            )
+            _target_files = plan_result.get("target_files") or []
+            if _target_files:
+                planning_content += "\n目标文件: " + ", ".join(_target_files)
+                _pf = state.context.setdefault("_promised_files", [])
+                for _f in _target_files:
+                    _fs = str(_f).strip()
+                    if _fs and _fs not in _pf:
+                        _pf.append(_fs)
             if last_error:
                 planning_content += f"\n修正: 基于错误 '{last_error}' 调整参数"
 
@@ -892,6 +1211,17 @@ class AgentGraph:
                 iteration=iteration,
                 meta_data={"reason": reason, "loop_index": loop_idx}
             )
+
+            # === 检查是否重复调用 ===
+            call_key = f"{action}:{json.dumps(params, sort_keys=True, default=str)}"
+            call_count = sum(1 for c in tool_call_history if c == call_key)
+            if call_count >= max_same_call:
+                logger.warning(f"[AgentGraph] 检测到相同调用重复 {call_count} 次，中断循环: {action}")
+                last_error = f"相同调用已重复 {call_count} 次，无法继续。请尝试其他方法或任务失败。"
+                if on_step:
+                    on_step("error", {"content": last_error, "todo_id": todo_id})
+                break
+            tool_call_history.append(call_key)
 
             # === NextMoves 阶段 ===
             if on_step:
@@ -942,23 +1272,119 @@ class AgentGraph:
             )
 
             # === Observation 阶段 ===
+            # 观察前注入任务目录现有文件清单（磁盘真相），让观察结论有据可查：
+            # 否则观察只能靠复述思考里的计划清单盲判（生产实测 todo0 因此
+            # 反复声称"仍需补全"已存在的文件，原地重写直至轮次耗尽失败）
+            _dir_files_note = ""
+            try:
+                from app.agent.skills.file_operations.skill import get_tasks_dir as _gtd0
+                _tp0 = context_obj.task_path or merged_params.get("task_path")
+                _base0 = (_gtd0() / _tp0) if _tp0 else None
+                if _base0 and os.path.isdir(_base0):
+                    _fl0 = []
+                    for _r0, _d0, _fs0 in os.walk(_base0):
+                        for _f0 in _fs0:
+                            try:
+                                _fl0.append(str(Path(_r0, _f0).relative_to(_base0)))
+                            except Exception:
+                                pass
+                    _dir_files_note = "\n\n【任务目录现有文件】\n" + (
+                        "\n".join(sorted(_fl0)) if _fl0 else "（空，尚未生成任何文件）"
+                    )
+            except Exception:
+                _dir_files_note = ""
             observation_result = await self._planner.observe(
                 state.task, todo_item.to_dict() if hasattr(todo_item, "to_dict") else todo,
-                action, merged_params, execution_result
+                action, merged_params, execution_result,
+                extra_context=f"【思考】\n{thought or ''}\n\n【计划】\n{planning_content}" + _dir_note + _dir_files_note,
             )
+            for _mf in (observation_result.get("files_mentioned") or []):
+                _ms = str(_mf).strip()
+                if _ms:
+                    _pf2 = state.context.setdefault("_promised_files", [])
+                    if _ms not in _pf2:
+                        _pf2.append(_ms)
 
             # 检查取消（LLM 调用后）
             if self._check_cancelled():
                 return {"success": False, "summary": "用户取消执行", "cancelled": True}
+
+            # === 提到的文件必须真实存在（用户规则：文件未生成=代码逻辑有问题，禁止完成） ===
+            _tp = None
+            try:
+                from app.agent.skills.file_operations.skill import get_tasks_dir as _gtd
+                _tp = context_obj.task_path or merged_params.get("task_path")
+                _base = (_gtd() / _tp) if _tp else None
+            except Exception:
+                _base = None
+            _missing = _check_promised_files(
+                list(observation_result.get("files_mentioned") or [])
+                + list(plan_result.get("target_files") or []),
+                merged_params, execution_result, _base,
+            )
+            if _missing:
+                _cur_missing = set(_missing)
+                if _prev_missing and _cur_missing < _prev_missing:
+                    # 缺失清单缩短 = 实质进展：追加轮次预算（上限12）
+                    _round_budget = min(_round_budget + 2, 12)
+                    logger.info(
+                        "[AgentGraph] 待办 %s 缺失文件有进展(%s->%s)，轮次预算增至 %s",
+                        todo_id, len(_prev_missing), len(_cur_missing), _round_budget,
+                    )
+                _prev_missing = _cur_missing
+            # 本轮成功落盘新文件 = 实质进展：追加轮次预算（上限12）。
+            # 只对写类动作计：读操作/重复覆盖已有文件不算进展
+            _op = merged_params.get("operation")
+            if execution_result.get("success") and action in (
+                "file_operations", "code_generator", "add_files_to_project", "improve_file"
+            ) and (action != "file_operations" or _op in ("write", "create", "edit")):
+                _np = _norm_rel(str(merged_params.get("path") or merged_params.get("output_path") or ""))
+                if _np and _np not in _written_files:
+                    _written_files.add(_np)
+                    if _round_budget < 12:
+                        _round_budget = min(_round_budget + 2, 12)
+                        logger.info("[AgentGraph] 待办 %s 落盘新文件 %s，轮次预算增至 %s", todo_id, _np, _round_budget)
+            _miss_msg = ""
+            if _missing:
+                _miss_msg = (
+                    "以下文件在本待办过程中提到但任务目录中不存在: "
+                    + ", ".join(_missing)
+                    + "。必须真实创建这些文件（写入磁盘）后本待办才算完成；"
+                    "已存在的文件不要重复创建，本轮只写上面缺失的文件；"
+                    "若不属于本待办产出，就不要在思考/计划中提及它们。"
+                    + (f"（任务目录: {_tp}，path 写目录内相对路径）" if _tp else "")
+                )
+                logger.warning("[AgentGraph] 待办 %s 提到的文件未生成: %s", todo_id, _missing)
+                observation_result["completed"] = False
+                observation_result["success"] = False
+                observation_result["reason"] = _miss_msg + (
+                    " 原判断: " + str(observation_result.get("reason") or "")
+                )
+                observation_result["suggestion"] = "生成缺失文件后重试"
+                # 保留原有错误信息（如工具失败），拼上缺失清单一起喂给下一轮思考
+                last_error = f"{last_error}；{_miss_msg}" if last_error else _miss_msg
+            elif not last_error and not observation_result.get("completed", False):
+                # 观察判未完成但闸门没拦（没有缺失文件）：把观察结论喂给
+                # 下一轮思考，否则模型不知道为何没完成、只会原地重写文件
+                # （生产实测：todo0 盲写12轮直至轮次耗尽失败的直接原因）
+                last_error = str(observation_result.get("reason") or "上一轮观察判断未完成")
 
             obs_content = f"完成状态: {'已完成' if observation_result.get('completed', False) else '未完成'}\n"
             obs_content += f"原因: {observation_result.get('reason', '')}\n"
             obs_content += f"建议: {observation_result.get('suggestion', '')}"
 
             if on_step:
+                _is_progress = (
+                    not observation_result.get("completed", False)
+                    and (loop_idx + 1) < _round_budget
+                )
                 on_step("observation", {
                     "content": obs_content,
                     "success": observation_result.get("success", False),
+                    # 工具本身是否执行成功——与观察判定分开上报：
+                    # 工具成功但观察判未完成 ≠ 工具失败，前端据此区分徽标语义
+                    "tool_success": bool(execution_result.get("success", False)),
+                    "progress": _is_progress,
                     "todo_id": todo_id
                 })
 
@@ -975,14 +1401,27 @@ class AgentGraph:
 
             # 更新 state_manager 中的错误记录
             if self._state_manager:
-                if not execution_result.get("success", False):
+                if not execution_result.get("success", False) or _missing:
                     self._state_manager.errors.append({
                         "todo_id": str(todo_id),
                         "error": last_error or "执行失败",
                     })
-                todo_item.status = TodoStatus.COMPLETED if execution_result.get("success", False) else TodoStatus.FAILED
+                if _missing:
+                    # 提到的文件没生成 = 未完成，禁止打勾，进入重试
+                    todo_item.status = TodoStatus.FAILED
+                    todo_item.error = _miss_msg
+                elif observation_result.get("completed", False):
+                    # 状态以观察（LLM）结论为准，禁止拿工具 success 代替判断
+                    todo_item.status = TodoStatus.COMPLETED
+                    todo_item.error = ""
+                elif execution_result.get("success", False):
+                    # 工具成功但观察判未完成 = 有进展、活没干完：保持进行中继续重试
+                    todo_item.status = TodoStatus.IN_PROGRESS
+                    todo_item.error = ""
+                else:
+                    todo_item.status = TodoStatus.FAILED
+                    todo_item.error = last_error or "执行失败"
                 todo_item.result = last_execution_result if execution_result.get("success", False) else ""
-                todo_item.error = last_error if not execution_result.get("success", False) else ""
 
             # 每个 action 后保存状态（断点恢复）
             if self._state_manager:
@@ -996,10 +1435,16 @@ class AgentGraph:
             if self._state_manager:
                 await self._state_manager.save_state()
 
-            # 如果 file_operations 成功，更新 context_obj.task_path（供后续待办使用）
-            if execution_result.get("success", False) and action == "file_operations":
+            # 如果写文件成功，更新 context_obj.task_path（供后续待办使用）
+            # code_generator 同样会落盘，必须一起处理，否则它的产物不进文件树
+            if execution_result.get("success", False) and action in ("file_operations", "code_generator"):
                 result_data = execution_result.get("data", {})
                 returned_project = result_data.get("project_name") if isinstance(result_data, dict) else None
+                if not returned_project:
+                    # write 操作不返回 project_name（只有 create 返回）。不兜底的话，
+                    # 首批文件之后每次写盘都不推 project_tree，文件结构区看不到新文件
+                    # （2026-11-09 生产：6 文件全在磁盘，结构区只显示前 3 个）
+                    returned_project = context_obj.task_path
                 if returned_project:
                     context_obj.task_path = returned_project
                     logger.info(f"[AgentGraph] file_operations 返回 project_name: {returned_project}")
@@ -1014,25 +1459,27 @@ class AgentGraph:
                         logger.debug(f"[AgentGraph] 保存 task_path 失败: {e}")
                     # 推送 project_tree 事件，让前端显示文件结构
                     if on_step:
+                        file_tree: List[Dict[str, Any]] = []
                         try:
-                            from app.agent.tools.storage.manager import StorageManager
-                            storage = StorageManager()
-                            file_tree = await storage.build_file_tree(returned_project)
-                            files = result_data.get("files", []) if isinstance(result_data, dict) else []
-                            on_step("project_tree", {
-                                "project_name": returned_project,
-                                "task_path": returned_project,
-                                "files": files,
-                                "file_tree": file_tree,
-                            })
+                            from app.agent.skills.file_operations.skill import get_tasks_dir
+                            _base = get_tasks_dir() / returned_project
+                            children = _walk_dir(_base, _base) if _base.exists() else []
+                            # 根节点 = 任务文件夹，文件全挂在它下面（对齐前端文件树约定）
+                            file_tree = [{
+                                "name": returned_project,
+                                "path": returned_project,
+                                "type": "folder",
+                                "children": children,
+                            }] if children else []
                         except Exception as e:
                             logger.warning(f"[AgentGraph] 构建文件树失败: {e}")
-                            files = result_data.get("files", []) if isinstance(result_data, dict) else []
-                            on_step("project_tree", {
-                                "project_name": returned_project,
-                                "task_path": returned_project,
-                                "files": files,
-                            })
+                        files = result_data.get("files", []) if isinstance(result_data, dict) else []
+                        on_step("project_tree", {
+                            "project_name": returned_project,
+                            "task_path": returned_project,
+                            "files": files,
+                            "file_tree": file_tree,
+                        })
 
             # 判断是否完成
             if observation_result.get("completed", False):
@@ -1048,20 +1495,14 @@ class AgentGraph:
                     )
                 }
 
-            # 执行成功但观察判断未完成，强制完成
-            if execution_result.get("success", False) and not observation_result.get("completed", False):
-                logger.info(f"[AgentGraph] 待办 {todo_id} 执行成功但观察判断未完成，强制标记为完成")
-                return {
-                    "success": True,
-                    "summary": "执行成功",
-                    "iteration": loop_idx + 1,
-                    "action": action,
-                    "project_name": (
-                        context_obj.task_path
-                        if action == "file_operations"
-                        else None
-                    )
-                }
+            # 执行成功但观察判断未完成：不再强制完成（2026-11-09 task23 实锤：
+            # 只读一轮没干活也会被"工具成功"放行 = 假完成）。以观察结论为准，
+            # 带着未完成原因进入下一轮重试；预算内完成不了则如实失败。
+            if (
+                execution_result.get("success", False)
+                and not observation_result.get("completed", False)
+            ):
+                last_error = "观察判断未完成: " + str(observation_result.get("reason") or "")
 
             # 更新上下文，进入下一轮循环
             logger.info(f"[AgentGraph] 待办 {todo_id} 第 {loop_idx + 1} 次失败: {last_error}")
@@ -1076,18 +1517,53 @@ class AgentGraph:
         }
 
     async def _ensure_task_path(self, params: Dict[str, Any], action: str) -> Dict[str, Any]:
-        """确保 params 中有 task_path"""
-        if "task_path" in params and params["task_path"]:
-            return params
+        """确保写文件类 action 始终用**同一个**任务目录（目录中途变换的根因）。
 
-        task_path_actions = {"file_operations", "add_files_to_project", "improve_file"}
+        规则：
+        1. 会话已有 task_path → 强制覆盖 params 里的值。LLM 每次编的
+           task_path 名字一律不用，否则前端文件树根节点跟着不停变换。
+        2. 没有 → 保留 params 给的；也没有就留空，由 file_operations 自建
+           auto_project_*，首次落盘后会写回 session（内存 + DB）。
+        code_generator 的落盘走 _auto_write_files，同样必须纳入本集合，
+        否则它每次都自建一个新目录。
+        """
+        task_path_actions = {
+            "file_operations",
+            "add_files_to_project",
+            "improve_file",
+            "code_generator",
+        }
         if action not in task_path_actions:
             return params
 
-        task_path = await self._get_session_task_path()
-        if task_path:
+        existing: Optional[str] = None
+        if self._session_id:
+            try:
+                # 内存优先（file_operations/code_generator 落盘后先写这里），
+                # 再回落 DB —— 只读 DB 时写入失败就会退回"每待办新建目录"
+                from app.api.v1.endpoints.agent import session_task_paths
+                existing = session_task_paths.get(self._session_id)
+            except Exception:
+                existing = None
+        if not existing:
+            existing = await self._get_session_task_path()
+
+        if existing and params.get("task_path") != existing:
             params = params.copy()
-            params["task_path"] = task_path
+            params["task_path"] = existing
+
+        # path 类参数规范化：剥离 ./、tasks/、任务目录名/外来项目目录名前缀，
+        # 防止嵌套写盘（app_xxx/src/... → src/...）
+        _changed = False
+        for _k in ("path", "output_path", "file", "filename", "file_path"):
+            _v = params.get(_k)
+            if isinstance(_v, str) and _v and not _v.startswith("/") and not _v.startswith("~"):
+                _nv = _norm_rel(_v)
+                if _nv and _nv != _v:
+                    if not _changed:
+                        params = params.copy()
+                        _changed = True
+                    params[_k] = _nv
         return params
 
     async def _get_session_task_path(self) -> Optional[str]:
@@ -1191,7 +1667,12 @@ class AgentGraph:
                 obs_message = self._format_step_observation(action_name, result, files_created)
 
                 if on_step:
-                    on_step("observation", {"observation": obs_message, "files": files_created, "result": result})
+                    on_step("observation", {
+                        "observation": obs_message,
+                        "files": files_created,
+                        "result": result,
+                        "tool_success": bool(result.get("success", True)),
+                    })
 
                 processed_results.append(result)
 
@@ -1409,7 +1890,8 @@ class AgentGraph:
                     "observation": obs_message,
                     "files": files_created,
                     "result": result,
-                    "success": result.get("success", True)
+                    "success": result.get("success", True),
+                    "tool_success": bool(result.get("success", True)),
                 })
 
             # 步骤失败处理
@@ -1620,10 +2102,10 @@ class AgentGraph:
 
         response = {
             "success": state.error is None,
-            "result": final_message or (
+            "result": cap_notice(final_message or (
                 state.results[-1].get("result", {}).get("data")
                 if state.results else None
-            ),
+            ), state),
             "error": state.error,
             "intent": state.intent,
             "intents": state.intents,

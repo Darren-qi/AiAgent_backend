@@ -101,6 +101,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestIDMiddleware)
     app.add_middleware(RequestTimingMiddleware)
 
+
     if settings.is_development:
         app.add_middleware(RequestLoggingMiddleware, log_body=False, log_headers=False)
 

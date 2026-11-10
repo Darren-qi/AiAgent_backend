@@ -28,8 +28,9 @@ def get_project_root() -> Path:
     # 4个parent: skill.py -> file_operations -> skills -> agent -> app
     # 再2个parent: backend -> AiAgent
     module_path = Path(__file__).resolve()
-    backend_dir = module_path.parent.parent.parent.parent
-    return backend_dir.parent
+    app_dir = module_path.parent.parent.parent.parent  # .../AiAgent_backend_langgraph/app
+    # 上两级：app -> AiAgent_backend_langgraph -> AiAgent（tasks 与前后端目录同级）
+    return app_dir.parent.parent
 
 
 def get_tasks_dir() -> Path:
@@ -167,6 +168,21 @@ class FileOperationsSkill(BaseSkill):
                 return True
         if '.' in name and not name.startswith('.'):
             return True
+        return False
+
+    def _looks_like_python_code(self, path: str) -> bool:
+        """判断路径是否像Python代码（而非合法文件路径）"""
+        if not path:
+            return False
+        # 检查是否包含Python关键字或语法
+        python_indicators = [
+            'def ', 'class ', 'import ', 'from ', 'return ',
+            '@app.', '@route', 'if __name__', 'print(',
+            '()', '->', ':', 'async def', 'await '
+        ]
+        for indicator in python_indicators:
+            if indicator in path:
+                return True
         return False
 
     # 操作别名映射：将 LLM 常见的误用操作名映射到正确操作
@@ -540,15 +556,33 @@ class FileOperationsSkill(BaseSkill):
                             error=f"错误：路径 '{abs_path}' 不在允许的目录 '{check_dir}' 范围内。"
                         )
             else:
-                # 没有项目目录，直接在 tasks 下创建
-                path = Path(file_path)
-                if path.is_absolute():
-                    abs_path = file_path
+                # 没有项目目录，自动创建一个项目目录
+                import time as time_module
+                timestamp = int(time_module.time())
+                # 尝试从文件路径推断项目名
+                path_parts = Path(file_path).parts
+                if len(path_parts) > 1:
+                    # 有子目录，使用第一个子目录作为项目名
+                    project_folder = f"{path_parts[0]}_{timestamp}"
+                    rel_write_path = str(Path(*path_parts[1:]))
                 else:
-                    path = self._tasks_dir / file_path
-                    abs_path = str(path.resolve())
+                    # 只有文件名，使用 auto_project 作为项目名
+                    project_folder = f"auto_project_{timestamp}"
+                    rel_write_path = file_path
+                target_dir = self._tasks_dir / project_folder
+                target_dir.mkdir(parents=True, exist_ok=True)
+                path = target_dir / rel_write_path
+                abs_path = str(path.resolve())
+                logger.info(f"[FileOps] 自动创建项目目录: {project_folder}")
 
-            # 3. 安全检查
+            # 3. 验证文件路径是否合法（不能包含Python代码）
+            if self._looks_like_python_code(file_path):
+                return SkillResult(
+                    success=False,
+                    error=f"文件路径无效: '{file_path}'。path 必须是合法的文件路径（如 'app.py'），不能包含Python代码。"
+                )
+
+            # 4. 安全检查
             if not self._is_safe_path(abs_path):
                 return SkillResult(success=False, error=f"安全检查失败：禁止写入路径 {abs_path}")
 
@@ -594,7 +628,7 @@ class FileOperationsSkill(BaseSkill):
 
             return SkillResult(
                 success=True,
-                data={"path": str(path), "size": len(content)},
+                data={"path": str(path), "size": len(content), "project_name": project_folder},
                 metadata={"operation": "write", "task_path": project_folder}
             )
         except Exception as e:
@@ -603,7 +637,7 @@ class FileOperationsSkill(BaseSkill):
 
     async def _read_file(self, file_path: str, encoding: str, session_id: Optional[str] = None, task_path: Optional[str] = None) -> SkillResult:
         """读取文件"""
-        # 优先使用 task_path（从外部传入），否则使用 _allowed_project_root（从 session 加载）
+        # 优先使用 task_path（从外部传入），否则使用 _allowed_project_root
         project_root = task_path or self._allowed_project_root
 
         # 尝试解析路径（处理相对路径和项目内路径）
@@ -621,7 +655,12 @@ class FileOperationsSkill(BaseSkill):
         try:
             path = Path(resolved_path)
             if not path.exists():
-                return SkillResult(success=False, error=f"文件不存在: {file_path}")
+                # 改进错误信息，提供更有用的建议
+                error_msg = f"文件不存在: {file_path}"
+                if project_root:
+                    error_msg += f"\n项目目录: {project_root}"
+                    error_msg += "\n提示: 请先使用 operation='write' 创建文件，再使用 operation='read' 读取"
+                return SkillResult(success=False, error=error_msg)
             if path.is_dir():
                 return SkillResult(success=False, error=f"路径是目录不是文件: {file_path}")
 

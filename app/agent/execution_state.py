@@ -15,6 +15,7 @@
 """
 
 import json
+import os
 import time
 import logging
 from dataclasses import dataclass, field, asdict
@@ -109,13 +110,14 @@ class ExecutionStateManager:
         session_id: str,
         task_id: str,
         user_input: str = "",
-        max_iterations: int = 50,
+        max_iterations: Optional[int] = None,
         max_scratchpad_length: int = 3000,
     ):
         self.session_id = session_id
         self.task_id = task_id
         self.user_input = user_input
-        self.max_iterations = max_iterations
+        self.max_iterations = int(os.getenv("AGENT_MAX_ROUNDS", "30")) if max_iterations is None else max_iterations
+        self._round_window = self.max_iterations
         self.max_scratchpad_length = max_scratchpad_length
 
         # 核心状态
@@ -184,8 +186,14 @@ class ExecutionStateManager:
         return None
 
     def is_all_todos_completed(self) -> bool:
+        """全部待办都真正 COMPLETED 才算 True。
+
+        FAILED 不能混进"已完成"：否则最后一个待办一失败，内层循环顶端
+        立刻判定"所有待办项已完成"终止，当前待办永远得不到重试
+        （2026-11-09 生产实测 task21：测试失败 0 次重试直接收尾）。
+        """
         for todo in self.todos:
-            if todo.status in [TodoStatus.PENDING, TodoStatus.IN_PROGRESS]:
+            if todo.status != TodoStatus.COMPLETED:
                 return False
         return True
 
@@ -264,6 +272,10 @@ class ExecutionStateManager:
 
     def next_iteration(self):
         self.iteration += 1
+
+    def extend_budget(self):
+        """被轮次上限截断后用户继续 -> 追加一个窗口的轮次预算"""
+        self.max_iterations = self.iteration + self._round_window
 
     def advance_todo(self):
         """推进到下一个待办"""

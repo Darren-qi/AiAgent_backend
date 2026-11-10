@@ -59,6 +59,12 @@ htmlcov/
 *.db
 *.sqlite3
 
+# 运行期任务产物（已移到仓库外的 AiAgent/tasks）
+/tasks/
+
+# 调试抓包（一次性）
+lgc*.json
+
 # OS
 .DS_Store
 Thumbs.db

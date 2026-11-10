@@ -22,6 +22,7 @@ QUICK_TODOS_PROMPT = """你是一个任务规划专家。请将用户任务分�
 2. 每行一个事项，格式: `- [ ] 事项描述`
 3. 事项描述要简洁，一行说完
 4. 不要详细展开每个步骤的实现细节
+5. 每个待办只负责 1-3 个文件的产出；要生成 4 个以上文件的任务必须拆成多个待办（如"搭建项目骨架"和"创建组件"分开写）
 
 ## 示例
 输入: "为用户模块添加 JWT 认证功能"
@@ -83,6 +84,8 @@ title: {title}
 2. 考虑需要的资源和步骤
 3. 预判可能的困难
 4. 简明输出你的思考
+5. 待办涉及多个文件时逐轮推进：每轮优先落盘缺失清单中的下一个文件，禁止重复生成已存在的文件
+6. 同一文件已读取过就直接基于已知内容修改写入，不要重复读取
 
 请输出你的思考："""
 
@@ -107,12 +110,51 @@ title: {title}
 2. 给出具体的参数
 3. 简洁明了
 
-输出格式：
-动作: <action_name>
-参数: <具体参数>
-原因: <为什么选择这个动作>
+## 重要：技能选择和参数格式
 
-请输出："""
+### 代码生成任务 → 使用 code_generator（首选！）
+**生成代码文件时必须用 code_generator，不要用 file_operations！**
+code_generator 会自动写入文件，参数格式：
+动作: code_generator
+参数: {"language": "python", "framework": "flask", "requirements": "创建 Flask 博客项目，包含 models.py, routes.py, templates/"}
+原因: 生成完整的 Flask 博客代码
+
+### 简单文件操作 → 使用 file_operations
+**仅当读取、列出、删除文件时使用 file_operations！**
+参数必须是 JSON 格式：
+- `operation`: create/write/read/list/delete
+- `path`: 文件路径（必须用 path！不是 filename）
+- `content`: 文件内容（write 时需要）
+
+### 示例
+
+**写入简单文件：**
+动作: file_operations
+参数: {"operation": "write", "path": "requirements.txt", "content": "Flask>=3.0"}
+原因: 创建依赖文件
+
+**读取文件：**
+动作: file_operations
+参数: {"operation": "read", "path": "app.py"}
+原因: 检查文件内容
+
+## 错误示例（绝对不要这样写）
+❌ 用 file_operations 写复杂的代码文件（应该用 code_generator）
+❌ 参数: {"filename": "app.py", "content": "..."}（参数名错误，应该用 path）
+❌ 参数: operation: write, path: app.py, content: ...（不是 JSON 格式）
+
+## 目标文件（必须输出）
+- 列出**本轮**动作会创建或修改的文件（相对任务目录的路径，含扩展名），逗号分隔，最多3个
+- 只列本待办标题范围内的产出；整个项目的文件清单分摊到各待办/各轮次，不要一次列全
+- 本待办不产出任何文件时写: 目标文件: 无
+- 新功能必须生成新文件；只有待办标题就是修改某个已有文件时才允许写它
+
+请输出（四行，缺一不可）：
+动作: <action_name>
+参数: {"key": "value"}
+原因: <为什么选择这个动作>
+目标文件: <file1.py, file2.py；无则写"无">
+"""
 
 # Observation 阶段 Prompt - 验证结果
 OBSERVATION_PROMPT = """观察执行结果，判断待办是否完成。
@@ -131,15 +173,32 @@ action: {action}
 ## 执行结果
 {result}
 
+## 过程记录（本待办的思考与计划，用于提取文件清单）
+{extra_context}
+
 ## 判断要求
 1. 结果是否成功？
-2. 是否达到预期效果？
+2. 是否达到预期效果？文件是否齐全**以输入中【任务目录现有文件】为准核实**，不要因思考里复述了计划清单就判未完成或已完成
 3. 是否需要继续或调整？
+4. 文件清单（files）只列"计划要产出但【任务目录现有文件】中没有"的缺失文件（相对路径，含扩展名）
+   - 已在【任务目录现有文件】中的不要列；reason 里点名"缺失/仍需补全"的文件必须同时列入 files（两者保持一致）
+   - 禁止把类别或需求描述（如"src、public、配置文件、组件、样式"）展开补全成具体文件清单
+   - 禁止罗列"一个完整项目应有的文件"；其他待办负责的文件不列
+   - 目录、工具名、概念不算文件；没有则写"无"
+5. **【完成判据】** 完成 =【任务目录现有文件】齐全 + 内容正确 + 与需求一致。
+   **环境能力边界**：沙箱只支持 Python（code/file 参数），服务器未安装 node/npm/docker，
+   npm install、npm run build、pytest、浏览器渲染这类运行验证**不可能在沙箱完成**，
+   **不得因此判未完成**。JS/前端/构建类任务以文件齐全 + 代码逻辑正确为完成依据；
+   仅当已实际运行的验证（Python 执行）报错时才判未完成，并附具体报错。
+   **反例（禁止）**：文件已写完且正确，却因"没跑过 npm build/没看到 stdout"判未完成——会让任务无限循环。
+   **正例**："5个文件齐全、代码正确，构建类任务无法在沙箱运行验证，判完成"；
+   "Python 实际运行抛 NameError: x 未定义，判未完成"。
 
 输出格式：
 完成状态: [已完成 / 部分完成 / 未完成]
 原因: <判断理由>
 建议: <下一步建议>
+文件: <逗号分隔的文件路径列表，或"无">
 """
 
 # Skill 清单（用于规划参考）
@@ -153,6 +212,11 @@ AVAILABLE_SKILLS = {
         "description": "生成代码，支持多种编程语言",
         "params": ["language", "requirements", "framework", "task_path"],
         "use_for": ["写代码", "生成代码", "编程"]
+    },
+    "sandbox": {
+        "description": "在隔离沙箱中运行 Python 代码或任务目录下的脚本（运行测试/验证）",
+        "params": ["code", "file", "timeout"],
+        "use_for": ["运行测试", "执行脚本", "验证代码", "跑用例"]
     },
     "data_processor": {
         "description": "数据处理、转换、统计分析",
@@ -393,7 +457,7 @@ class Planner:
                 model=None,
                 strategy="fast",  # 使用快速策略
                 temperature=0.3,
-                max_tokens=500,  # 限制 token，快速返回
+                max_tokens=1000,  # 待办可能较多，500 会截断列表
             )
 
             content = response.content.strip()
@@ -509,7 +573,8 @@ class Planner:
                 model=None,
                 strategy="quality",
                 temperature=0.3,
-                max_tokens=500,
+                # write 场景 content 会带整段代码，500 token 截断后 JSON 解析失败
+                max_tokens=4096,
             )
 
             content = response.content.strip()
@@ -560,14 +625,33 @@ class Planner:
         # 如果有错误，在 prompt 中添加错误反馈
         feedback_section = ""
         if last_error:
+            # 分析错误类型，提供更具体的修正建议
+            correction_hints = ""
+            if "文件不存在" in last_error:
+                correction_hints = """
+**错误分析**: 文件不存在，说明需要先创建文件。
+**修正策略**: 使用 file_operations 的 operation='write' 创建文件（会自动创建父目录），然后再读取或编辑。
+"""
+            elif "缺少 path 参数" in last_error:
+                correction_hints = """
+**错误分析**: 缺少必要的 path 参数。
+**修正策略**: 必须在 params 中明确指定 path 参数，例如: {"path": "app.py", "content": "..."}
+"""
+            elif "缺少" in last_error and "参数" in last_error:
+                correction_hints = """
+**错误分析**: 缺少必要参数。
+**修正策略**: 检查 Skill 的参数要求，确保所有必需参数都已提供。
+"""
+
             feedback_section = f"""
 ## 上一步执行失败
 错误信息: {last_error}
 执行结果: {last_result}
-
+{correction_hints}
 请分析失败原因，并给出修正后的动作和参数。
 
-**重要**: 必须修正上一步缺失的参数，特别是 `path` 参数必须明确指定值。"""
+**重要**: 必须修正上一步缺失的参数，特别是 `path` 参数必须明确指定值。
+"""
 
         prompt = f"""基于你的思考，制定具体的执行动作。
 
@@ -589,15 +673,27 @@ title: {todo.get("title", "")}
 1. 动作名称必须是上面列表中的有效名称
 2. **参数必须完整且具体**:
    - file_operations: 必须包含 path、operation
+     - path 必须是合法的文件路径，例如: "app.py", "routes/__init__.py", "templates/index.html"
+     - **path 不能包含 Python 代码**，不能是 "@app.route('/')" 这样的内容
    - http_client: 必须包含 url
    - code_generator: 必须包含 requirements/language
 3. 如果上一步失败，必须修正对应的参数
+4. **目标文件必须列出**：本轮动作会创建或修改的文件路径（相对任务目录，含扩展名），最多3个；本待办其余文件在后续轮次计划中列出；不产出文件写"无"。新功能=新文件，禁止为"新增功能"覆盖已有文件
+5. **测试/脚本必须实跑**：待办涉及测试或可执行脚本时，写完后必须规划 sandbox 动作（file=脚本相对路径）运行它；测试不通过就把错误带回下一步修复，不能只写不跑
+
+## 文件路径示例（正确 vs 错误）
+✅ 正确: {{"operation": "write", "path": "app.py", "content": "from flask import Flask..."}}
+✅ 正确: {{"operation": "write", "path": "routes/__init__.py", "content": ""}}
+✅ 正确: {{"operation": "write", "path": "templates/index.html", "content": "<!DOCTYPE html>..."}}
+❌ 错误: {{"operation": "write", "path": "@app.route('/')", "content": "..."}}
+❌ 错误: {{"operation": "write", "path": "def index()", "content": "..."}}
 
 ## 输出格式（严格按此格式）
 ```
 动作: <action_name>
 参数: {{"key": "value", "key2": "value2"}}
 原因: <为什么选择这个动作>
+目标文件: <file1.py, file2.py；不产出文件写"无">
 ```"""
 
         try:
@@ -606,7 +702,8 @@ title: {todo.get("title", "")}
                 model=None,
                 strategy="quality",
                 temperature=0.3,
-                max_tokens=500,
+                # content 里要放整段代码，500 token 会硬截断导致 JSON 解析失败
+                max_tokens=4096,
             )
 
             content = response.content.strip()
@@ -702,6 +799,18 @@ title: {todo.get("title", "")}
         reason_match = re.search(r'原因[:：]\s*(.+)', content)
         if reason_match:
             result["reason"] = reason_match.group(1).strip()
+
+        # 解析目标文件（本待办应产出/修改的文件清单，供"文件未生成=禁止完成"核对）
+        result["target_files"] = []
+        tf_match = re.search(r'目标文件[:：]\s*(.+)', content)
+        if tf_match:
+            raw = tf_match.group(1).strip()
+            if raw and not re.match(r'^(无|none|None|-)$', raw, re.I):
+                result["target_files"] = [
+                    p.strip().strip('`"\'')
+                    for p in re.split(r'[,，、;；\s]+', raw)
+                    if p.strip()
+                ]
 
         return result
 
@@ -807,10 +916,56 @@ title: {todo.get("title", "")}
             match = re.match(r'^(\w+)\s*[:=]\s*(.+)$', pair)
             if match:
                 key = match.group(1).strip()
-                value = match.group(2).strip().strip('"\'')
+                value = match.group(2).strip()
                 result[key] = value
 
+        # 检测异常情况：如果值中包含换行符或 Python 代码特征，说明解析错误
+        for key, value in list(result.items()):
+            if '\n' in str(value) or 'def ' in str(value) or 'class ' in str(value) or 'db.Column' in str(value):
+                logger.warning(f"[Planner] 检测到异常的参数解析结果: {key}={str(value)[:100]}...")
+                # 这种情况下，整个 params_str 可能是被错误解析的 content
+                # 返回空 dict 让调用方重试
+                return {}
+
         return result
+
+    async def missing_required_files(self, task: str, existing_files: list) -> list:
+        """任务级 LLM 核对：已生成文件是否覆盖任务必需的产出（用户硬规则 2026-11-09）。
+
+        只列"缺失会导致任务无法完成/无法运行"的必需文件；
+        建议性文件（README、注释、额外功能）一律不列。
+        返回相对路径列表，无缺失返回空表。
+        """
+        existing = "\n".join(existing_files) if existing_files else "（空）"
+        prompt = f"""任务原文：
+{task}
+
+已生成文件：
+{existing}
+
+判断：上面的文件是否覆盖了任务要求的必需产出？只列"缺失会导致任务无法完成或无法运行"的文件路径（相对路径，含扩展名）。
+- 不要列建议性/锦上添花的文件（如 README.md、注释文件、额外功能文件）
+- 不要列目录
+- 已生成的文件不要重复列
+- 只输出真实文件的相对路径（文件名必须带扩展名）；模块名、类名、变量名、函数名、配置键不是文件，即使带点号也不是文件路径
+没有缺失则只输出：无"""
+        try:
+            content = await self._llm_chat(messages=[{"role": "user", "content": prompt}], max_tokens=500)
+        except Exception as e:
+            logger.warning(f"[Planner] 必需文件核对 LLM 失败(忽略): {e}")
+            return []
+        if not content:
+            return []
+        out = []
+        for line in str(content).splitlines():
+            line = line.strip().strip("-*·`").strip()
+            if not line or line in ("无", "none", "None", "没有", "无缺失", "没有缺失"):
+                continue
+            # 扩展名必须小写且 1-4 位：否则 "datetime.datetime" 这类导入路径会被当成文件
+            m = re.search(r"([A-Za-z0-9_\-]+(?:/[A-Za-z0-9_\-]+)*\.[a-z][a-z0-9]{0,3})(?![A-Za-z0-9])", line)
+            if m:
+                out.append(m.group(1))
+        return out[:10]
 
     async def observe(
         self,
@@ -818,7 +973,8 @@ title: {todo.get("title", "")}
         todo: Dict[str, Any],
         action: str,
         params: Dict[str, Any],
-        result: Dict[str, Any]
+        result: Dict[str, Any],
+        extra_context: str = "",
     ) -> Dict[str, Any]:
         """
         Observation 阶段：验证执行结果
@@ -829,17 +985,31 @@ title: {todo.get("title", "")}
             action: 执行的动作
             params: 执行参数
             result: 执行结果
+            extra_context: 本待办的思考与计划文本（用于提取"提到的文件"清单）
 
         Returns:
-            观察结果 {completed, reason, suggestion, success}
+            观察结果 {completed, reason, suggestion, success, files_mentioned}
         """
+        # 如果工具执行本身失败了，直接返回未完成，不依赖 LLM 判断
+        if not result.get("success", False):
+            error_msg = result.get("error", "未知错误")
+            logger.warning(f"[Planner] 工具执行失败，跳过 LLM 观察: {error_msg}")
+            return {
+                "completed": False,
+                "reason": f"工具执行失败: {error_msg}",
+                "suggestion": "调整参数重试",
+                "success": False,
+                "files_mentioned": [],
+            }
+
         prompt = OBSERVATION_PROMPT.format(
             task=task,
             todo_id=todo.get("id", 0),
             title=todo.get("title", ""),
             action=action,
             params=str(params),
-            result=str(result)
+            result=str(result),
+            extra_context=(extra_context or "（无）")[:3000],
         )
 
         try:
@@ -848,11 +1018,13 @@ title: {todo.get("title", "")}
                 model=None,
                 strategy="quality",
                 temperature=0.3,
-                max_tokens=400,
+                max_tokens=700,
             )
 
             content = response.content.strip()
-            return self._parse_observation_response(content)
+            llm_result = self._parse_observation_response(content)
+            # 即使 LLM 说"已完成"，如果工具返回了数据为空，也要降级
+            return llm_result
 
         except asyncio.CancelledError:
             raise  # 传播取消信号，不吞掉
@@ -863,7 +1035,8 @@ title: {todo.get("title", "")}
                 "completed": result.get("success", False),
                 "reason": f"观察完成（LLM 调用失败: {e}）",
                 "suggestion": "继续" if result.get("success") else "调整",
-                "success": result.get("success", False)
+                "success": result.get("success", False),
+                "files_mentioned": [],
             }
 
     def _parse_observation_response(self, content: str) -> Dict[str, Any]:
@@ -872,7 +1045,8 @@ title: {todo.get("title", "")}
             "completed": False,
             "reason": "无法判断",
             "suggestion": "继续",
-            "success": False
+            "success": False,
+            "files_mentioned": [],
         }
 
         # 解析完成状态
@@ -880,7 +1054,7 @@ title: {todo.get("title", "")}
             result["completed"] = True
             result["success"] = True
         elif "部分完成" in content:
-            result["completed"] = False
+            result["completed"] = True  # 部分完成也视为完成，避免过度严格
             result["success"] = True
         elif "未完成" in content:
             result["completed"] = False
@@ -895,6 +1069,15 @@ title: {todo.get("title", "")}
         suggestion_match = re.search(r'建议[:：]\s*(.+)', content)
         if suggestion_match:
             result["suggestion"] = suggestion_match.group(1).strip()
+
+        # 解析"提到的文件"清单（本待办过程中提到、应当存在的文件）
+        files_match = re.search(r'^文件[:：]\s*(.+)$', content, re.MULTILINE)
+        if files_match:
+            raw = files_match.group(1).strip()
+            if raw and raw not in ("无", "none", "None", "-"):
+                result["files_mentioned"] = [
+                    f.strip().strip('`"\'') for f in re.split(r'[,，、;；\s]+', raw) if f.strip()
+                ]
 
         return result
 

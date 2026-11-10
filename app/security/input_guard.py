@@ -40,12 +40,10 @@ class InputGuard:
             if command.lower() in content_lower:
                 return False, f"内容包含禁止命令: {command}"
 
-        if self._check_sql_injection(content):
-            return False, "检测到潜在的 SQL 注入"
-
-        if self._check_xss(content):
-            return False, "检测到潜在的 XSS 攻击"
-
+        # 2026-11-10：移除 SQL 注入/XSS 正则穷举检查（误杀实证：任务含 Markdown '#'
+        # 或英文 CREATE/UPDATE 等词即判"SQL 注入"，线上任务报错根因之一）。
+        # 任务文本是数据不是 SQL/HTML：入库参数化（pgsaver）、前端 Vue 默认转义。
+        # 保留长度上限与危险命令拦截；_check_sql_injection/_check_xss 留给测试。
         return True, None
 
     def _check_sql_injection(self, content: str) -> bool:

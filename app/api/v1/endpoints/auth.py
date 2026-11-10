@@ -1,6 +1,6 @@
 """Auth endpoint module"""
 
-from fastapi import APIRouter, status, Depends
+from fastapi import APIRouter, status, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,4 +59,6 @@ async def get_current_user_info(
 ) -> UserResponse:
     user_service = UserService(db)
     user = await user_service.get_user_by_id(current_user["id"])
+    if user is None:
+        raise HTTPException(status_code=401, detail="用户不存在，请重新登录")
     return UserResponse.model_validate(user)

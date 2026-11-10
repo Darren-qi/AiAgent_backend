@@ -34,7 +34,7 @@ services:
       - LOG_LEVEL=INFO
     volumes:
       - ../logs:/app/logs
-      - ../tasks:/app/tasks
+      - ../../tasks:/app/tasks
     depends_on:
       - postgres
       - redis

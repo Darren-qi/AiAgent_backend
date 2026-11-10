@@ -54,6 +54,9 @@ class AuthService:
         """
         # 验证用户凭证
         user = await self.user_service.authenticate(username_or_email, password)
+        if user is None:
+            # 用户不存在或密码错误：返回 401（旧版对不存在用户名 None.id 直接崩 500）
+            raise InvalidCredentialsException()
 
         # 生成令牌
         token = self._create_tokens(str(user.id))

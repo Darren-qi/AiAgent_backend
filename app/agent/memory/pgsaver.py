@@ -9,7 +9,7 @@ import logging
 from typing import Any, Dict, List, Optional, TypeVar
 from uuid import uuid4
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,7 +63,7 @@ class PostgresSaver:
             sequence=last_seq + 1,
         )
         self._session.add(message)
-        await self._session.flush()
+        await self._session.commit()
         logger.info(f"[PostgresSaver] 保存消息: session={session_id}, role={role}, seq={last_seq + 1}")
         return message.id
 
@@ -113,6 +113,7 @@ class PostgresSaver:
             delete(ConversationMessage)
             .where(ConversationMessage.session_id == session_id)
         )
+        await self._session.commit()
         return result.rowcount or 0
 
     async def save_fact(
@@ -134,7 +135,7 @@ class PostgresSaver:
             },
         )
         result = await self._session.execute(stmt)
-        await self._session.flush()
+        await self._session.commit()
         return result.inserted_primary_key[0] if result.inserted_primary_key else 0
 
     async def get_fact(
@@ -170,6 +171,7 @@ class PostgresSaver:
                 SemanticFact.fact_key == fact_key,
             )
         )
+        await self._session.commit()
         return (result.rowcount or 0) > 0
 
     async def clear_facts(self, session_id: str) -> int:
@@ -177,6 +179,7 @@ class PostgresSaver:
         result = await self._session.execute(
             delete(SemanticFact).where(SemanticFact.session_id == session_id)
         )
+        await self._session.commit()
         return result.rowcount or 0
 
     async def save_episode(
@@ -197,7 +200,7 @@ class PostgresSaver:
             summary=summary,
         )
         self._session.add(episode)
-        await self._session.flush()
+        await self._session.commit()
         return episode.id
 
     async def get_episode(self, episode_id: str) -> Optional[Dict[str, Any]]:
@@ -243,6 +246,7 @@ class PostgresSaver:
         result = await self._session.execute(
             delete(EpisodicEvent).where(EpisodicEvent.session_id == session_id)
         )
+        await self._session.commit()
         return result.rowcount or 0
 
     async def save_working(
@@ -267,7 +271,7 @@ class PostgresSaver:
             },
         )
         result = await self._session.execute(stmt)
-        await self._session.flush()
+        await self._session.commit()
         logger.info(f"[PostgresSaver] 保存工作记忆: session={session_id}, key={memory_key}")
         return result.inserted_primary_key[0] if result.inserted_primary_key else 0
 
@@ -308,8 +312,9 @@ class PostgresSaver:
                 WorkingMemory.session_id == session_id,
                 WorkingMemory.memory_key == memory_key,
             )
-            .values(deleted_at=None)
+            .values(deleted_at=func.now())
         )
+        await self._session.commit()
         return (result.rowcount or 0) > 0
 
     async def clear_working(self, session_id: str) -> int:
@@ -320,8 +325,9 @@ class PostgresSaver:
                 WorkingMemory.session_id == session_id,
                 WorkingMemory.deleted_at.is_(None),
             )
-            .values(deleted_at=None)
+            .values(deleted_at=func.now())
         )
+        await self._session.commit()
         return result.rowcount or 0
 
     async def save_session_context(

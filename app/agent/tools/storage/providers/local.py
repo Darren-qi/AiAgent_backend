@@ -26,8 +26,8 @@ class LocalStorageProvider(BaseStorageProvider):
         # 6个parent -> backend/，7个parent -> AiAgent/，8个parent -> E:/Projects/
         module_path = Path(__file__).resolve()
         backend_dir = module_path.parents[5]  # 6个parent -> backend/
-        # 项目根目录 = backend 的上两级（AiAgent/ -> Projects/）
-        project_root = backend_dir.parent.parent
+        # 项目根目录 = backend 的上一级（AiAgent/，tasks 与前后端目录同级）
+        project_root = backend_dir.parent
         default_tasks = project_root / "tasks"
 
         storage_path = os.environ.get("LOCAL_STORAGE_PATH")

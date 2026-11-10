@@ -11,8 +11,9 @@ import json
 
 from loguru import logger
 
-from app.api.deps import OptionalCurrentUser
+from app.api.deps import CurrentUser, OptionalCurrentUser
 from app.db.session import get_db, AsyncSessionLocal
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.schemas.agent import AgentExecuteRequest, AgentExecuteResponse
 from app.agent.graphs.main_graph import AgentGraph
 from app.agent.memory.manager import MemoryManager
@@ -25,6 +26,30 @@ from app.models.experience import SessionModel
 
 router = APIRouter()
 
+
+async def _load_hist_note(db: AsyncSession, session_id: str, cur_task: str,
+                          limit: int = 6) -> str:
+    """多轮历史块（模块级）：非流式 execute 用；语义同流式 _history_note。"""
+    try:
+        from app.agent.memory.pgsaver import PostgresSaver
+        msgs = await PostgresSaver(db).get_messages(session_id, limit=200)
+    except Exception:  # noqa: BLE001 - 历史缺失不影响执行
+        msgs = []
+    finally:
+        # 只读查询会留下 idle-in-transaction 占住连接；显式归还，防连接池耗尽
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+    msgs = msgs[-(limit + 1):]
+    if msgs and (msgs[-1].get("content") or "").strip() == (cur_task or "").strip():
+        msgs = msgs[:-1]  # 去掉刚写入的本轮任务
+    lines = [f"{'用户' if m.get('role') == 'user' else '助手'}: {(m.get('content') or '').strip()[:300]}"
+             for m in msgs[-limit:]
+             if (m.get("content") or "").strip() and m.get("role") in ("user", "assistant")]
+    return ("【历史对话】（仅供理解上下文，不要重复执行历史内容）\n"
+            + "\n".join(lines)) if lines else ""
+
 input_guard = InputGuard()
 output_guard = OutputGuard()
 # memory_managers 存储 (MemoryManager, AsyncSession) 元组，AsyncSession 需在请求结束时提交
@@ -33,6 +58,54 @@ memory_managers: Dict[str, tuple] = {}
 session_task_paths: Dict[str, str] = {}
 # 追踪运行中的任务: {session_id: (asyncio.Task, AgentGraph)}
 running_tasks: Dict[str, tuple] = {}
+
+
+async def _finalize_db_task(task_id: str, status: str, error: str = "") -> None:
+    """把 tasks 表状态写成最终值。
+
+    原先任务记录创建时写 status='running' 后再没人更新过，导致所有任务
+    永远停在 running（失败的也是 running），看起来就是"任务没执行完"。
+    """
+    try:
+        from sqlalchemy import update
+        from app.models.experience import TaskModel
+        async with AsyncSessionLocal() as s:
+            stmt = (
+                update(TaskModel)
+                .where(TaskModel.task_id == task_id)
+                .values(status=status, error=error or "", updated_at=datetime.now(timezone.utc))
+            )
+            if status != "completed":
+                # 已完成的任务不被"客户端断连"覆盖成 failed
+                stmt = stmt.where(TaskModel.status != "completed")
+            await s.execute(stmt)
+            await s.commit()
+    except Exception as e:
+        logger.warning(f"[Agent] 更新任务最终状态失败: {e}")
+
+
+async def _persist_assistant(session_id: str, content: str) -> None:
+    """落库 assistant 最终回答（独立协程 + 独立 DB 会话）。
+
+    不能依赖请求作用域的 db / memory_managers：图内部 on_step("complete")
+    后客户端一断开，_real_execute_task 会被 CancelledError 打断，请求作用域
+    的落库点根本执行不到（旧代码因此 assistant 从未落库）。
+    """
+    try:
+        from app.agent.memory.pgsaver import PostgresSaver
+        async with AsyncSessionLocal() as save_db:
+            await PostgresSaver(save_db).save_message(
+                session_id=session_id,
+                role="assistant",
+                content=content,
+            )
+            await save_db.commit()
+        logger.info(f"[Agent] assistant 消息已落库: session={session_id}, len={len(content)}")
+    except asyncio.CancelledError:
+        logger.warning(f"[Agent] assistant 落库协程被取消: session={session_id}")
+        raise
+    except Exception as e:  # noqa: BLE001 - 落库失败不改变任务结果
+        logger.error(f"[Agent] assistant 消息落库失败: {session_id}, {e}")
 
 
 # 会话内存存储（消息数据）
@@ -57,7 +130,7 @@ class CreateSessionRequest(BaseModel):
 async def execute_task(
     request: AgentExecuteRequest,
     background_tasks: BackgroundTasks,
-    user: OptionalCurrentUser = None,
+    user: CurrentUser,
 ) -> AgentExecuteResponse:
     """执行 Agent 任务"""
     is_safe, error_msg = input_guard.check(request.task)
@@ -70,7 +143,7 @@ async def execute_task(
         )
 
     # 注意：括号确保 request.session_id 优先被使用
-    session_id = request.session_id or (f"{user['id']}_{request.task[:20]}" if user else f"anon_{request.task[:20]}")
+    session_id = request.session_id or f"{user['id']}_{request.task[:20]}"
     db = AsyncSessionLocal()
 
     if session_id not in memory_managers:
@@ -79,48 +152,40 @@ async def execute_task(
     _memory_manager, _ = memory_managers[session_id]
     await _memory_manager.add_user_message(request.task)
 
-    # 确保会话在数据库中存在（否则 execution_nodes 外键会失败）
+    # 确保会话在数据库中存在（否则 execution_nodes 外键会失败）。
+    # 落库失败必须显式报错——旧版静默降级内存存储，"看似成功、刷新全丢"
     session_created = False
     try:
-        async for db in _get_db():
+        async with AsyncSessionLocal() as db2:
             from sqlalchemy import select
-            from app.models.experience import SessionModel
             stmt = select(SessionModel).where(SessionModel.session_id == session_id)
-            result = await db.execute(stmt)
+            result = await db2.execute(stmt)
             existing = result.scalar_one_or_none()
             if not existing:
                 now = datetime.now(timezone.utc)
                 db_session = SessionModel(
                     session_id=session_id,
-                    user_id=user["id"] if user else 0,
+                    user_id=user["id"],
                     title=request.task[:50] if request.task else "新会话",
                     status="active",
-                    task_path=None,
                     created_at=now,
                     updated_at=now,
                 )
-                db.add(db_session)
-                await db.commit()
+                db2.add(db_session)
+                await db2.commit()
                 session_created = True
                 logger.info(f"[Agent] 创建数据库会话: {session_id}")
             else:
                 logger.debug(f"[Agent] 会话已存在: {session_id}")
-            break
     except Exception as e:
-        logger.warning(f"[Agent] 创建会话记录失败: {e}")
-        # 如果创建失败，尝试从 sessions_store 获取或生成临时会话
-        if session_id not in sessions_store:
-            sessions_store[session_id] = {
-                "session_id": session_id,
-                "title": request.task[:50] if request.task else "新会话",
-                "messages": [],
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
+        logger.error(f"[Agent] 创建会话记录失败（显式报错，不再静默降级）: {e}")
+        raise HTTPException(status_code=503, detail="会话创建失败，请稍后重试")
 
     graph = AgentGraph()
     result = await graph.execute(
         task=request.task,
-        context={"user_id": user["id"] if user else None, "session_id": session_id}
+        context={"user_id": user["id"] if user else None, "session_id": session_id,
+                 "history_note": await _load_hist_note(db, session_id, request.task)}
     )
 
     if result.get("success"):
@@ -147,7 +212,7 @@ async def execute_task(
 @router.post("/execute/stream")
 async def execute_task_stream(
     request: AgentExecuteRequest,
-    user: OptionalCurrentUser = None,
+    user: CurrentUser,
 ) -> StreamingResponse:
     """执行 Agent 任务（流式返回）"""
     # 安全检查
@@ -159,7 +224,7 @@ async def execute_task_stream(
 
     # 记录请求开始
     import sys
-    session_id = request.session_id or (f"{user['id']}_{request.task[:20]}" if user else f"anon_{request.task[:20]}")
+    session_id = request.session_id or f"{user['id']}_{request.task[:20]}"
     sys.stderr.write(f"[Agent] ====== execute/stream: session_id={session_id} ======\n")
     sys.stderr.flush()
 
@@ -185,7 +250,6 @@ async def execute_task_stream(
                 user_id=user["id"] if user else 0,
                 title=request.task[:50] if request.task else "新会话",
                 status="active",
-                task_path=task_folder,
                 created_at=now,
                 updated_at=now,
             )
@@ -194,19 +258,26 @@ async def execute_task_stream(
             session_created = True
             logger.info(f"[Agent] 创建数据库会话成功: {session_id}")
         else:
-            logger.debug(f"[Agent] 会话已存在: {session_id}")
+            # 兜底创建方（main_graph 里那段）会写死 user_id=0 / title="Agent Session"，
+            # 这里按当前登录态校正归属，否则刷新后 list-sessions 按真实 user_id 过滤查不到
+            if user:
+                want_uid = user["id"]
+                want_title = (request.task or "")[:50]
+                if (existing.user_id or 0) != want_uid or existing.title == "Agent Session":
+                    existing.user_id = want_uid
+                    if want_title and existing.title in (None, "", "Agent Session", "新会话"):
+                        existing.title = want_title
+                    await db.commit()
+                    logger.info(f"[Agent] 会话归属已校正: {session_id} -> user_id={want_uid}")
+                else:
+                    logger.debug(f"[Agent] 会话已存在: {session_id}")
+            else:
+                logger.debug(f"[Agent] 会话已存在: {session_id}")
     except Exception as e:
         import traceback
-        logger.error(f"[Agent] 创建会话记录失败: {e}")
+        logger.error(f"[Agent] 创建会话记录失败（显式报错，不再静默降级）: {e}")
         logger.error(f"[Agent] 完整错误: {traceback.format_exc()}")
-        # 如果创建失败，尝试从 sessions_store 获取或生成临时会话
-        if session_id not in sessions_store:
-            sessions_store[session_id] = {
-                "session_id": session_id,
-                "title": request.task[:50] if request.task else "新会话",
-                "messages": [],
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
+        raise HTTPException(status_code=503, detail="会话创建失败，请稍后重试")
 
     # 初始化 MemoryManager，传入数据库会话（这样 conversation_messages 会被保存）
     if session_id not in memory_managers:
@@ -230,14 +301,76 @@ async def execute_task_stream(
         # 心跳间隔（秒）
         heartbeat_interval = 30
 
+        # 捕获 final_summary：这是最终回答的干净文本（complete 事件里的
+        # result 在 LangGraph 下是步骤转储），用于会话结束后落库 assistant 消息。
+        # persist_state：一旦取到文本立刻 create_task 落库 —— 图内部的
+        # on_step("complete") 会让前端/客户端断开，_real_execute_task 随即被
+        # CancelledError 打断，放在返回后的落库点会永远执行不到
+        # （2026-11-10 本地 e2e 实测：断连后 assistant 消息丢失、任务被标 failed）。
+        persist_state = {"text": "", "scheduled": False}
+
+        def _schedule_persist(text_value: str):
+            text_value = (text_value or "").strip()
+            if not text_value or persist_state["scheduled"]:
+                return
+            persist_state["scheduled"] = True
+            asyncio.create_task(_persist_assistant(session_id, text_value))
+
         # 定义回调函数，将事件添加到队列
         def on_step(step_type: str, data: Dict[str, Any]):
+            if step_type == "final_summary":
+                try:
+                    text = (data.get("summary") or "").strip()
+                    suggestions = data.get("suggestions") or []
+                    if suggestions:
+                        text += "\n\n📌 建议下一步:\n" + "\n".join(
+                            f"{i + 1}. {s}" for i, s in enumerate(suggestions)
+                        )
+                    if text:
+                        persist_state["text"] = text
+                        _schedule_persist(text)
+                except Exception:  # noqa: BLE001 - 捕获失败不影响推送
+                    pass
+            elif step_type == "complete":
+                # 有些路径（断点恢复后无新执行）不发 final_summary，
+                # 但 complete 事件里可能带纯文本 result → 也落库
+                try:
+                    v = data.get("result")
+                    if isinstance(v, str) and v.strip():
+                        persist_state["text"] = persist_state.get("text") or v.strip()
+                        _schedule_persist(v)
+                except Exception:  # noqa: BLE001
+                    pass
             asyncio.create_task(queue.put(f"event: {step_type}\ndata: {json.dumps(data)}\n\n"))
 
         # 推送开始事件
         yield f"event: start\ndata: {json.dumps({'task_id': session_id, 'task_path': task_folder})}\n\n"
 
         # 执行任务
+        exec_state = {"finished": False}
+
+        async def _history_note(db, sid, cur_task, limit: int = 6) -> str:
+            """多轮历史块：只进 thought_context，禁拼 state.task（承诺文件种子化）。"""
+            try:
+                from app.agent.memory.pgsaver import PostgresSaver
+                msgs = await PostgresSaver(db).get_messages(sid, limit=200)
+            except Exception:  # noqa: BLE001 - 历史缺失不影响执行
+                msgs = []
+            finally:
+                # 只读查询留下 idle-in-transaction 占连接；显式归还防池耗尽
+                try:
+                    await db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+            msgs = msgs[-(limit + 1):]
+            if msgs and (msgs[-1].get("content") or "").strip() == (cur_task or "").strip():
+                msgs = msgs[:-1]  # 去掉刚写入的本轮任务
+            lines = [f"{'用户' if m.get('role') == 'user' else '助手'}: {(m.get('content') or '').strip()[:300]}"
+                     for m in msgs[-limit:]
+                     if (m.get("content") or "").strip() and m.get("role") in ("user", "assistant")]
+            return ("【历史对话】（仅供理解上下文，不要重复执行历史内容）\n"
+                    + "\n".join(lines)) if lines else ""
+
         async def _real_execute_task():
             from app.agent.cancel_signal import cancel_signal
 
@@ -258,15 +391,42 @@ async def execute_task_stream(
                             "user_id": user["id"] if user else None,
                             "session_id": session_id,
                             "task_path": task_folder,
+                            "history_note": await _history_note(db, session_id, request.task),
                         },
                         on_step=on_step
                     )
-                    # 推送完成事件
-                    await queue.put(f"event: complete\ndata: {json.dumps(result)}\n\n")
+                    # 执行主体已结束：此后即使前端断开也不再取消本任务
+                    exec_state["finished"] = True
+                    # 先落库再通知前端 —— 前端收到 complete 会立刻断开，
+                    # 若先推事件再写库，取消信号会打断状态回写（任务永远停在 running）
+                    # AgentGraph.execute 吞掉异常后正常返回 _format_error(success=False)，
+                    # 若这里无脑写 completed，失败任务在库里也显示"完成"
+                    # （2026-11-09 实测：任务18 报错却 status=completed）。
+                    if isinstance(result, dict) and not result.get("success", True):
+                        await _finalize_db_task(
+                            session_id, "failed",
+                            str(result.get("error") or "任务执行失败"),
+                        )
+                    else:
+                        # 兜底落库：final_summary 已在 on_step 里 create_task 即时
+                        # 落库；这里只覆盖 final_summary 缺失的场景（共用去重开关）
+                        answer = (persist_state.get("text") or "").strip()
+                        if not answer and isinstance(result, dict):
+                            for key in ("summary", "result"):
+                                val = result.get(key)
+                                if isinstance(val, str) and val.strip():
+                                    answer = val.strip()
+                                    break
+                        if answer:
+                            _schedule_persist(answer)
+                        await _finalize_db_task(session_id, "completed")
 
                     # 执行完成后，更新会话的任务路径
                     if task_folder:
                         _update_session_task_path(session_id, task_folder)
+
+                    # 最后才推送完成事件
+                    await queue.put(f"event: complete\ndata: {json.dumps(result)}\n\n")
                 finally:
                     # 清理引用
                     task_manager.complete_task(session_id)
@@ -281,6 +441,7 @@ async def execute_task_stream(
                 # 前端断开连接或被 abort 端点取消 — 立即推送 stopped 事件
                 logger.warning(f"[Agent] 任务被取消: session_id={session_id}")
                 task_manager.stop_task(session_id)
+                await _finalize_db_task(session_id, "failed", "任务被取消")
                 cancel_signal.cancel(session_id)  # 确保取消信号被设置
                 await queue.put(f"event: stopped\ndata: {json.dumps({'message': '任务已被终止'})}\n\n")
                 raise
@@ -289,6 +450,7 @@ async def execute_task_stream(
                 logger.error(f"[Agent] 任务执行异常: {e}")
                 await queue.put(f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n")
                 task_manager.fail_task(session_id)
+                await _finalize_db_task(session_id, "failed", str(e))
             finally:
                 # 注销取消信号
                 cancel_signal.unregister(session_id)
@@ -329,14 +491,18 @@ async def execute_task_stream(
         except asyncio.CancelledError:
             # 前端断开连接，取消正在执行的任务
             logger.info(f"[Agent] 前端断开连接，取消任务: {session_id}")
+            # 若这轮已经拿到最终回答（final_summary/complete 已到），断连也照样落库，
+            # 否则「用户断连」会把这轮的 AI 回复丢掉，历史里只剩一串用户消息
+            if (persist_state.get("text") or "").strip():
+                _schedule_persist(persist_state["text"].strip())
             running_info = running_tasks.pop(session_id, None)
             if running_info:
                 running_task, graph = running_info
                 # 关键：调用 Task.cancel() 会在最近的 await 点抛出 CancelledError
                 # 这会立即中断 LLM 调用等长时间阻塞操作
-                if running_task and not running_task.done():
+                if running_task and not running_task.done() and not exec_state["finished"]:
                     running_task.cancel()
-                if graph:
+                if graph and not exec_state["finished"]:
                     graph.cancel()
             task_manager.stop_task(session_id)
             raise
@@ -417,25 +583,30 @@ async def abort_task(task_id: str, user: OptionalCurrentUser = None) -> Dict[str
 
 
 # ============ 前端兼容的会话端点 ============
-
-async def _get_db():
-    """获取数据库会话，不存在时返回 None（不崩溃）"""
-    try:
-        async for session in get_db():
-            yield session
-    except Exception as e:
-        logger.error(f"[Agent] 数据库会话获取失败: {e}")
+# 注：旧 `_get_db`（async for + break，连接滞留到 GC）已废弃，统一用
+# `async with AsyncSessionLocal() as db` 确定性关闭。
 
 
 @router.get("/list-sessions/")
 async def list_sessions(
     user: OptionalCurrentUser = None,
 ) -> dict:
-    """获取会话列表 - 前端兼容"""
+    """获取会话列表 - 前端兼容（会话绑定用户：未登录返回空，非管理员只看自己的）"""
+    # 未登录：不返回任何会话
+    if user is None:
+        return {
+            "code": 200,
+            "message": "success",
+            "data": {"sessions": [], "total": 0},
+        }
     try:
         from sqlalchemy import select
-        async for db in _get_db():
-            stmt = select(SessionModel).order_by(SessionModel.updated_at.desc()).limit(50)
+        async with AsyncSessionLocal() as db:
+            stmt = select(SessionModel).order_by(SessionModel.updated_at.desc())
+            # 非管理员只看自己的会话（管理员看全部）
+            if user.get("role") != "admin":
+                stmt = stmt.where(SessionModel.user_id == user["id"])
+            stmt = stmt.limit(50)
             result = await db.execute(stmt)
             sessions_db = result.scalars().all()
 
@@ -460,7 +631,13 @@ async def list_sessions(
     except Exception:
         pass
 
-    # 降级到内存存储
+    # 降级到内存存储（内存无归属信息：仅管理员可见，其余返回空，避免跨用户泄露）
+    if user.get("role") != "admin":
+        return {
+            "code": 200,
+            "message": "success",
+            "data": {"sessions": [], "total": 0},
+        }
     sessions = [
         {
             "session_id": sid,
@@ -482,50 +659,208 @@ async def list_sessions(
     }
 
 
+def _build_task_tree(task_path: str) -> list:
+    """构建任务目录文件树。
+
+    必须与运行时 project_tree 事件同源：文件由 file_operations skill 写进
+    get_tasks_dir()/<task_path>，而 StorageManager 的本地根指向另一处 tasks，
+    用它构建恒为空树（2026-11-10 生产实测：目录在磁盘、get-session 返回 []）。
+    """
+    try:
+        if not task_path:
+            return []
+        from pathlib import Path
+        from app.agent.skills.file_operations.skill import get_tasks_dir
+        from app.agent.graphs.main_graph import _walk_dir
+
+        base = get_tasks_dir() / task_path
+        if not base.exists() or not base.is_dir():
+            return []
+        children = _walk_dir(Path(base), Path(base))
+        # 根节点 = 任务文件夹（对齐运行时 project_tree 事件的树格式）
+        return [{
+            "name": task_path,
+            "path": task_path,
+            "type": "folder",
+            "children": children,
+        }] if children else []
+    except Exception as e:  # noqa: BLE001 - 树构建失败不应让会话详情整体 500
+        logger.warning(f"[Agent] 构建任务目录树失败: task_path={task_path}, {e}")
+        return []
+
+
+async def _load_db_messages(db, session_id: str) -> tuple[list, list]:
+    """从 PG 读会话消息，返回 (前端消息列表, 原始 role 列表)。
+
+    按「轮次」交替组织：user → 该轮 assistant（缺则补该轮执行过程卡）→ 下一轮
+    user …，而不是把用户挤在前面、AI 内容全垫在最后（2026-11-10 用户反馈）。
+    老会话 assistant 从未落库（修复前 bug），其执行节点按时间戳切到各自轮次；
+    各轮 AI 正文已无法找回（tasks.result 空、无 final_summary 节点、无 checkpoint），
+    只能用过程卡代表该轮反馈。
+    """
+    from app.agent.memory.pgsaver import PostgresSaver
+
+    raw = await PostgresSaver(db).get_messages(session_id, limit=500)
+    roles = [m.get("role") for m in raw]
+    rows = [
+        m for m in raw
+        if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()
+    ]
+
+    # 切轮次：user 开一轮，其后的 assistant 归入该轮
+    turns = []
+    for m in rows:
+        if m.get("role") == "user":
+            turns.append({"user": m, "assistant": []})
+        elif turns:
+            turns[-1]["assistant"].append(m)
+        else:
+            turns.append({"user": None, "assistant": [m]})
+
+    # 只有存在「缺回答的轮次」才去捞执行节点
+    nodes = []
+    if not turns or any(not t["assistant"] for t in turns):
+        from sqlalchemy import select
+        from app.models.execution_node import ExecutionNode
+        nodes = (await db.execute(
+            select(ExecutionNode)
+            .where(ExecutionNode.session_id == session_id)
+            .order_by(ExecutionNode.id)
+            .limit(500)
+        )).scalars().all()
+
+    step_type_map = {
+        "thought": "thinking",
+        "planning": "planning",
+        "next_moves": "action",
+        "observation": "observation",
+    }
+
+    def _card_for(node_rows):
+        steps = []
+        for n in node_rows:
+            content = (n.content or "").strip()
+            if not content:
+                continue
+            step = {"type": step_type_map.get(n.node_type, "thinking"),
+                    "content": content[:2000]}
+            if n.node_type == "next_moves" and n.action:
+                step["action"] = n.action
+            if n.node_type == "observation" and n.success is not None:
+                step["success"] = n.success
+            steps.append(step)
+        return {"type": "thinking", "content": "", "steps": steps} if steps else None
+
+    def _in_window(n, start, end):
+        """节点时间落在 [start, end) 才属于该轮；时间比不了就归该轮。"""
+        ts = getattr(n, "created_at", None)
+        if ts is None or start is None:
+            return True
+        try:
+            if start is not None and ts < start:
+                return False
+            if end is not None and ts >= end:
+                return False
+            return True
+        except TypeError:
+            return True
+
+    messages = []
+    for i, t in enumerate(turns):
+        nxt_user = turns[i + 1]["user"] if i + 1 < len(turns) else None
+        start = (t["user"] or {}).get("created_at")
+        end = (nxt_user or {}).get("created_at") if nxt_user else None
+        # 下一轮用户时间与本轮相同（重复/批量写入的数据）时窗口为空 → 该轮
+        # 永远分不到节点，会出现 user、user 相邻；此时放开上界，宁可节点重复
+        if start is not None and end is not None and end <= start:
+            end = None
+        if t["user"]:
+            messages.append({"type": "user", "content": t["user"].get("content") or ""})
+        if t["assistant"]:
+            for a in t["assistant"]:
+                messages.append({"type": "assistant",
+                                 "content": a.get("content") or ""})
+        elif nodes:
+            card = _card_for([n for n in nodes if _in_window(n, start, end)])
+            if card:
+                messages.append(card)
+
+    await db.rollback()  # 只读查询归还连接
+    return messages, roles
+
+
 @router.get("/get-session/")
 async def get_session(
     session_id: str = Query(..., description="会话ID"),
     user: OptionalCurrentUser = None,
 ) -> dict:
-    """获取会话详情 - 前端兼容"""
+    """获取会话详情 - 前端兼容
+
+    消息、标题、任务目录一律以数据库为准；sessions_store 仅作兜底，
+    且早退分支不得丢弃已算出的 file_tree/task_path
+    （2026-11-10 生产 bug：刷新后点历史会话，对话与任务目录全空）。
+    """
     file_tree = []
     task_path = None
-    session_data = {}
+    title = ""
+    db_messages = None
 
     try:
-        async for db in _get_db():
+        async with AsyncSessionLocal() as db:
             from sqlalchemy import select
             stmt = select(SessionModel).where(SessionModel.session_id == session_id)
             result = await db.execute(stmt)
             session_db = result.scalar_one_or_none()
 
             if session_db:
-                # 从 SessionContext 表获取 task_path
-                task_path = None
-                try:
-                    from app.agent.tools.session_context import get_session_context
-                    task_path = await get_session_context(session_id, "task_path")
-                except Exception:
-                    pass
-                if task_path:
-                    from app.agent.tools.storage.manager import StorageManager
-                    storage = StorageManager()
-                    file_tree = await storage.build_file_tree(task_path)
-            session_data = sessions_store.get(session_id, {})
-            break
-    except Exception:
-        session_data = sessions_store.get(session_id, {})
-        task_path = session_data.get("task_path")
+                title = session_db.title or ""
 
-    if not session_data:
+            # 任务目录/消息一律读库：老会话可能只有 conversation_messages、
+            # sessions 表没有行（只在消息表留痕），不能因为 session 行缺失就返回空
+            try:
+                from app.agent.tools.session_context import get_session_context
+                task_path = await get_session_context(session_id, "task_path")
+                await db.rollback()
+            except Exception:  # noqa: BLE001
+                task_path = None
+            if not task_path:
+                task_path = session_task_paths.get(session_id)
+            if task_path:
+                file_tree = _build_task_tree(task_path)
+            try:
+                db_messages, _ = await _load_db_messages(db, session_id)
+            except Exception as e:  # noqa: BLE001 - 消息读失败降级到内存兜底
+                logger.warning(f"[Agent] 读取会话消息失败: {session_id}, {e}")
+                await db.rollback()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[Agent] get-session 数据库读取失败: {session_id}, {e}")
+
+    session_data = sessions_store.get(session_id, {})
+    if not title:
+        title = session_data.get("title", "")
+    if not task_path:
+        task_path = session_data.get("task_path")
+        if task_path and not file_tree:
+            file_tree = _build_task_tree(task_path)
+
+    if db_messages is None:
+        db_messages = session_data.get("messages", []) or []
+    if db_messages:
+        messages = db_messages
+    else:
+        messages = session_data.get("messages", []) or []
+
+    if not session_data and not db_messages and not file_tree:
+        # 会话完全不存在：仍返回 code 0（前端严格判 code === 0）
         return {
             "code": 0,
             "message": "success",
             "data": {
                 "session_id": session_id,
+                "title": title,
                 "messages": [],
                 "file_tree": [],
-                "task_path": None
+                "task_path": task_path
             }
         }
 
@@ -534,8 +869,8 @@ async def get_session(
         "message": "success",
         "data": {
             "session_id": session_id,
-            "title": session_data.get("title", ""),
-            "messages": session_data.get("messages", []),
+            "title": title,
+            "messages": messages,
             "file_tree": file_tree,
             "task_path": task_path,
         }
@@ -574,26 +909,28 @@ async def create_session(
         "updated_at": now,
     }
 
-    sessions_store[session_id] = session_data
-    session_task_paths[session_id] = task_folder
-
     try:
-        async for db in _get_db():
-            now = datetime.now(timezone.utc)
+        async with AsyncSessionLocal() as db:
+            # 注意：函数内 `import datetime` 把名字绑定成了模块，必须用 datetime.datetime.now()
+            # 旧代码 datetime.now(...) = AttributeError 且被 except 吞成假 200（2026-11-10 实锤）
+            now = datetime.datetime.now(timezone.utc)
             db_session = SessionModel(
                 session_id=session_id,
                 user_id=user["id"] if user else 0,
                 title=request.title or "新会话",
                 status="active",
-                task_path=task_folder,
                 created_at=now,
                 updated_at=now,
             )
             db.add(db_session)
             await db.commit()
-            break
     except Exception as e:
-        logger.warning(f"[Agent] 保存会话到数据库失败: {e}")
+        # 落库失败必须显式报错——静默返 200 会"看似建好、刷新全丢"（2026-11-10 线上根因）
+        logger.error(f"[Agent] 保存会话到数据库失败（显式报错，不再静默降级）: {e}")
+        raise HTTPException(status_code=503, detail="会话创建失败，请稍后重试")
+
+    sessions_store[session_id] = session_data
+    session_task_paths[session_id] = task_folder
 
     return {
         "code": 200,
@@ -637,13 +974,90 @@ async def delete_session_by_query(
         del session_task_paths[task_id]
 
     try:
-        async for db in _get_db():
+        async with AsyncSessionLocal() as db:
             from sqlalchemy import delete
             stmt = delete(SessionModel).where(SessionModel.session_id == task_id)
             await db.execute(stmt)
             await db.commit()
-            break
     except Exception as e:
         logger.warning(f"[Agent] 删除会话失败: {e}")
 
     return {"success": True, "message": "deleted"}
+
+
+# ---------- 文件读取 / 列表 / 下载（前端预览、重开会话恢复文件树） ----------
+# 前端约定：GET /agent/read-file/?file_path=xxx -> {code:0, data:{content}}
+# 路径相对 tasks 根目录（如 auto_project_x/a.md），文件树里的 path 已带任务目录前缀。
+
+def _tasks_root():
+    from app.agent.skills.file_operations.skill import get_tasks_dir
+    return get_tasks_dir().resolve()
+
+
+def _safe_file(file_path: str):
+    """把路径收敛到 tasks 目录内，防目录穿越。"""
+    from pathlib import Path
+    root = _tasks_root()
+    p = Path(file_path)
+    p = (p if p.is_absolute() else root / p).resolve()
+    if p != root and root not in p.parents:
+        raise HTTPException(status_code=400, detail="路径越界")
+    return p
+
+
+@router.get("/read-file/")
+async def read_file(file_path: str):
+    """读任务目录内文件内容（供右侧预览）。"""
+    p = _safe_file(file_path)
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if p.is_dir():
+        raise HTTPException(status_code=400, detail="是目录，不是文件")
+    content = p.read_text(encoding="utf-8", errors="replace")
+    return {"code": 0, "message": "ok",
+            "data": {"path": file_path, "content": content[:200000],
+                     "truncated": len(content) > 200000}}
+
+
+@router.get("/get-files/")
+async def get_files(session_id: str):
+    """某会话产出的文件列表（重开会话时恢复文件结构）。"""
+    from pathlib import Path
+    from sqlalchemy import select
+    from app.models import SessionFile
+    async with AsyncSessionLocal() as s:
+        rows = (await s.execute(
+            select(SessionFile).where(SessionFile.session_id == session_id)
+        )).scalars().all()
+    files = [{"name": Path(r.file_path).name, "path": r.file_path, "type": "file"}
+             for r in rows if r.file_path]
+    return {"code": 0, "message": "ok", "data": {"files": files}}
+
+
+@router.get("/download-file/")
+async def download_file(file_path: str):
+    from fastapi.responses import FileResponse
+    p = _safe_file(file_path)
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(p, filename=p.name)
+
+
+@router.get("/download-dir/")
+async def download_dir(dir: str):
+    """打包整个任务目录为 zip 下载。"""
+    import io
+    import zipfile
+    from fastapi.responses import StreamingResponse
+    p = _safe_file(dir)
+    if not p.is_dir():
+        raise HTTPException(status_code=400, detail="不是目录")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in sorted(p.rglob("*")):
+            if f.is_file():
+                zf.write(f, f.relative_to(p))
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="application/zip",
+                             headers={"Content-Disposition":
+                                      f'attachment; filename="{p.name}.zip"'})
