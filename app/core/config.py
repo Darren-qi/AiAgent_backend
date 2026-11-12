@@ -141,6 +141,36 @@ class Settings(BaseSettings):
     )
 
     # =========================================
+    # 上下文管理器（app/agent/context 的 ContextManager）
+    # =========================================
+    context_max_tokens: int = Field(default=60000, description="上下文 token 预算")
+    context_compress_trigger_ratio: float = Field(default=0.7, description="超此比例触发压缩")
+    context_compress_target_ratio: float = Field(default=0.5, description="压缩回目标比例")
+    context_protect_recent_steps: int = Field(default=2, description="最近 N step 保护")
+    context_turn_compress_min_steps: int = Field(default=10, description="长循环折叠阈值")
+    context_external_store: str = Field(default="memory", description="外部存储 memory|pgsaver")
+    context_recall_enabled: bool = Field(default=True, description="是否启用跨步召回")
+    context_recall_mode: str = Field(default="trigger+vector", description="off|trigger_only|trigger+vector")
+    context_similarity_threshold: float = Field(default=0.5, description="向量召回相似度阈值")
+
+    def build_context_config(self):
+        """构建 ContextManager 配置（延迟导入避免循环依赖）。"""
+        from app.agent.context import ContextConfig, RecallConfig
+        return ContextConfig(
+            max_tokens=self.context_max_tokens,
+            compress_trigger_ratio=self.context_compress_trigger_ratio,
+            compress_target_ratio=self.context_compress_target_ratio,
+            protect_recent_steps=self.context_protect_recent_steps,
+            turn_compress_min_steps=self.context_turn_compress_min_steps,
+            external_store=self.context_external_store,
+            recall=RecallConfig(
+                enabled=self.context_recall_enabled,
+                mode=self.context_recall_mode,
+                similarity_threshold=self.context_similarity_threshold,
+            ),
+        )
+
+    # =========================================
     # 配置验证
     # =========================================
     @field_validator("environment")

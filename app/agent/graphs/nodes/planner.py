@@ -17,22 +17,32 @@ QUICK_TODOS_PROMPT = """你是一个任务规划专家。请将用户任务分�
 ## 用户任务
 {task}
 
+## 初步判断（先做这一步）
+先判断任务复杂度，决定拆解方式：
+- **简单任务**：多轮对话中的小改动——新增或修改单个文件、改一处配置/文案/逻辑、
+  加一个文件或对某个文件进行调整等，一两步即可完成，无需拆解设计。
+- **复杂任务**：涉及多文件/多模块/需要分阶段设计与交付的任务。
+
 ## 输出要求
-1. 只输出 2-5 个待办事项，不要太多
-2. 每行一个事项，格式: `- [ ] 事项描述`
-3. 事项描述要简洁，一行说完
-4. 不要详细展开每个步骤的实现细节
-5. 每个待办只负责 1-3 个文件的产出；要生成 4 个以上文件的任务必须拆成多个待办（如"搭建项目骨架"和"创建组件"分开写）
+1. 简单任务：只输出 1 条待办（把任务本身作为一条直接执行的动作），
+   且该行末尾必须附加标记 ` [SIMPLE]`，不再输出其他待办。
+2. 复杂任务：只输出 2-5 个待办事项，不要太多；每行一个，格式: `- [ ] 事项描述`
+3. 事项描述要简洁，一行说完；不要详细展开每个步骤的实现细节
+4. 每个待办只负责 1-3 个文件的产出；要生成 4 个以上文件的任务必须拆成多个待办（如"搭建项目骨架"和"创建组件"分开写）
 
 ## 示例
 输入: "为用户模块添加 JWT 认证功能"
-输出:
+输出（复杂）:
 - [ ] 创建 JWT 认证工具类
 - [ ] 实现登录接口
 - [ ] 添加 Token 验证中间件
 
+输入: "在 main.py 里加一行日志打印"
+输出（简单）:
+- [ ] 在 main.py 中添加日志打印 [SIMPLE]
+
 输入: "爬取某网站新闻并保存"
-输出:
+输出（复杂）:
 - [ ] 获取网页内容
 - [ ] 解析新闻数据
 - [ ] 保存到文件
@@ -474,7 +484,7 @@ class Planner:
         return self._create_fallback_todos(task)
 
     def _parse_quick_todos(self, content: str) -> List[Dict[str, Any]]:
-        """解析快速待办输出"""
+        """解析快速待办输出；识别 [SIMPLE] 标记（简单任务初判，只保留 1 条直接执行）"""
         todos = []
         lines = content.split('\n')
 
@@ -485,6 +495,18 @@ class Planner:
             if match:
                 title = match.group(1).strip()
                 if title:
+                    # 简单任务标记：去掉标记文本，标记到 todo 上，只保留这一条
+                    if "[SIMPLE]" in title.upper():
+                        title = re.sub(r'\s*\[SIMPLE\]', '', title, flags=re.IGNORECASE).strip()
+                        todos = [{
+                            "id": 1,
+                            "title": title,
+                            "action": None,
+                            "params": {},
+                            "status": "pending",
+                            "simple": True,
+                        }]
+                        break
                     todos.append({
                         "id": len(todos) + 1,
                         "title": title,
@@ -492,6 +514,10 @@ class Planner:
                         "params": {},
                         "status": "pending"
                     })
+
+        # 简单任务兜底：只有 1 条待办也视为简单（前端据此不摆计划框）
+        if len(todos) == 1 and "simple" not in todos[0]:
+            todos[0]["simple"] = True
 
         return todos
 
@@ -597,13 +623,39 @@ class Planner:
                 "reason": f"降级执行（LLM 调用失败: {e}）"
             }
 
+    def _skill_schema_hint(self, skill_name: str) -> str:
+        """JIT（方案 §3-12）：平时 prompt 只带"名称+一句话"技能清单；
+        只在选中技能出错重试时，取其全量参数 schema 注入反馈。"""
+        if not skill_name:
+            return ""
+        try:
+            for s in get_loader().get_schemas():
+                if s.get("name") != skill_name:
+                    continue
+                params = s.get("parameters") or {}
+                props = params.get("properties") or {}
+                required = set(params.get("required") or [])
+                if not props:
+                    return f"\n\n**{skill_name} 参数要求**: 无参数"
+                lines = [
+                    f"- {k}（{'必填' if k in required else '可选'}）: "
+                    f"{(v or {}).get('description', '')}".rstrip(": ")
+                    for k, v in props.items()
+                ]
+                return (f"\n\n**{skill_name} 全量参数 schema**"
+                        f"（按此修正，必填项一个都不能少）:\n" + "\n".join(lines))
+        except Exception as e:  # noqa: BLE001 - schema 获取失败不阻塞规划
+            logger.warning(f"[Planner] 获取 skill schema 失败: {e}")
+        return ""
+
     async def plan_action_with_feedback(
         self,
         task: str,
         todo: Dict[str, Any],
         thought: str,
         last_error: str = None,
-        last_result: str = None
+        last_result: str = None,
+        last_action: str = None,
     ) -> Dict[str, Any]:
         """
         Planning 阶段：生成执行动作（带错误反馈）
@@ -616,6 +668,7 @@ class Planner:
             thought: 思考结果
             last_error: 上一步的错误信息
             last_result: 上一步的执行结果
+            last_action: 上一步选中的技能名（JIT：出错才注入其全量 schema）
 
         Returns:
             动作配置 {action, params, reason}
@@ -651,7 +704,8 @@ class Planner:
 请分析失败原因，并给出修正后的动作和参数。
 
 **重要**: 必须修正上一步缺失的参数，特别是 `path` 参数必须明确指定值。
-"""
+""" + (self._skill_schema_hint(last_action)
+        if last_error and "缺少" in last_error and "参数" in last_error else "")
 
         prompt = f"""基于你的思考，制定具体的执行动作。
 

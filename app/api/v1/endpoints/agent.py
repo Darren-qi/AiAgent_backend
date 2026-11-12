@@ -84,7 +84,8 @@ async def _finalize_db_task(task_id: str, status: str, error: str = "") -> None:
         logger.warning(f"[Agent] 更新任务最终状态失败: {e}")
 
 
-async def _persist_assistant(session_id: str, content: str) -> None:
+async def _persist_assistant(session_id: str, content: str,
+                              metadata: Optional[Dict[str, Any]] = None) -> None:
     """落库 assistant 最终回答（独立协程 + 独立 DB 会话）。
 
     不能依赖请求作用域的 db / memory_managers：图内部 on_step("complete")
@@ -98,6 +99,7 @@ async def _persist_assistant(session_id: str, content: str) -> None:
                 session_id=session_id,
                 role="assistant",
                 content=content,
+                metadata=metadata,
             )
             await save_db.commit()
         logger.info(f"[Agent] assistant 消息已落库: session={session_id}, len={len(content)}")
@@ -307,14 +309,16 @@ async def execute_task_stream(
         # on_step("complete") 会让前端/客户端断开，_real_execute_task 随即被
         # CancelledError 打断，放在返回后的落库点会永远执行不到
         # （2026-11-10 本地 e2e 实测：断连后 assistant 消息丢失、任务被标 failed）。
+        # 结构化落库：建议不再拼进正文（拼接后历史回放只能显示成纯文字），
+        # 走 metadata.suggestions → get-session 组回 complete 步骤的可点击建议
         persist_state = {"text": "", "scheduled": False}
 
-        def _schedule_persist(text_value: str):
+        def _schedule_persist(text_value: str, metadata: Optional[Dict[str, Any]] = None):
             text_value = (text_value or "").strip()
             if not text_value or persist_state["scheduled"]:
                 return
             persist_state["scheduled"] = True
-            asyncio.create_task(_persist_assistant(session_id, text_value))
+            asyncio.create_task(_persist_assistant(session_id, text_value, metadata))
 
         # 定义回调函数，将事件添加到队列
         def on_step(step_type: str, data: Dict[str, Any]):
@@ -322,13 +326,9 @@ async def execute_task_stream(
                 try:
                     text = (data.get("summary") or "").strip()
                     suggestions = data.get("suggestions") or []
-                    if suggestions:
-                        text += "\n\n📌 建议下一步:\n" + "\n".join(
-                            f"{i + 1}. {s}" for i, s in enumerate(suggestions)
-                        )
                     if text:
                         persist_state["text"] = text
-                        _schedule_persist(text)
+                        _schedule_persist(text, {"suggestions": suggestions} if suggestions else None)
                 except Exception:  # noqa: BLE001 - 捕获失败不影响推送
                     pass
             elif step_type == "complete":
@@ -717,22 +717,22 @@ async def _load_db_messages(db, session_id: str) -> tuple[list, list]:
         else:
             turns.append({"user": None, "assistant": [m]})
 
-    # 只有存在「缺回答的轮次」才去捞执行节点
-    nodes = []
-    if not turns or any(not t["assistant"] for t in turns):
-        from sqlalchemy import select
-        from app.models.execution_node import ExecutionNode
-        nodes = (await db.execute(
-            select(ExecutionNode)
-            .where(ExecutionNode.session_id == session_id)
-            .order_by(ExecutionNode.id)
-            .limit(500)
-        )).scalars().all()
+    # 执行节点无条件捞取：过程行（读写/执行）也要随刷新回放，
+    # 不能只在「缺正文」时才查（2026-11-12 用户反馈：刷新后过程与样式全丢）
+    from sqlalchemy import select
+    from app.models.execution_node import ExecutionNode
+    nodes = (await db.execute(
+        select(ExecutionNode)
+        .where(ExecutionNode.session_id == session_id)
+        .order_by(ExecutionNode.id)
+        .limit(500)
+    )).scalars().all()
 
     step_type_map = {
         "thought": "thinking",
         "planning": "planning",
-        "next_moves": "action",
+        # 对齐实时 SSE：用 next_moves（前端才有动作词/关键参数/展开详情模板）
+        "next_moves": "next_moves",
         "observation": "observation",
     }
 
@@ -746,8 +746,17 @@ async def _load_db_messages(db, session_id: str) -> tuple[list, list]:
                     "content": content[:2000]}
             if n.node_type == "next_moves" and n.action:
                 step["action"] = n.action
-            if n.node_type == "observation" and n.success is not None:
-                step["success"] = n.success
+            if n.node_type == "next_moves" and n.params:
+                step["params"] = n.params
+            if n.node_type == "observation":
+                if n.success is not None:
+                    step["success"] = n.success
+                # 非显式失败的成功观察并入上一条动作行（展开详情=读到/写入了什么），
+                # 与实时前端合并逻辑一致；失败保留独立行（红字可见）
+                if n.success is not False:
+                    if steps and steps[-1].get("type") == "next_moves" and "result" not in steps[-1]:
+                        steps[-1]["result"] = content[:2000]
+                        continue
             steps.append(step)
         return {"type": "thinking", "content": "", "steps": steps} if steps else None
 
@@ -776,14 +785,36 @@ async def _load_db_messages(db, session_id: str) -> tuple[list, list]:
             end = None
         if t["user"]:
             messages.append({"type": "user", "content": t["user"].get("content") or ""})
+        # 过程卡（读写/执行行）在前——与实时顺序一致
+        card = _card_for([n for n in nodes if _in_window(n, start, end)])
+        if card:
+            messages.append(card)
+        # 正文卡：type=thinking + complete 步骤 → 走 StepItem 完成渲染
+        # （纯文字+样式）。旧方案 type="assistant" 落到前端兜底分支=纯文本
+        # 且不渲染 markdown——刷新后样式全丢（2026-11-12 用户反馈）
         if t["assistant"]:
             for a in t["assistant"]:
-                messages.append({"type": "assistant",
-                                 "content": a.get("content") or ""})
-        elif nodes:
-            card = _card_for([n for n in nodes if _in_window(n, start, end)])
-            if card:
-                messages.append(card)
+                content = (a.get("content") or "").strip()
+                if not content:
+                    continue
+                meta = a.get("metadata") or {}
+                suggestions = meta.get("suggestions") or []
+                # 旧数据救回：历史落库有两代形态——①拼接"📌 建议下一步:"纯文本
+                # ②正文含"### 建议下一步"段但未带 metadata。复用 Integrator 的
+                # 切段/剥离逻辑解回结构化建议并从正文剥离，恢复可点击（2026-11-12）
+                if not suggestions and "建议下一步" in content:
+                    from app.agent.graphs.nodes.integrator import Integrator
+                    suggestions = Integrator._extract_suggestions(content)
+                    content = Integrator._strip_suggestions_section(content)
+                step0 = {"type": "complete", "final_answer": content,
+                         "collapsed": False}
+                if suggestions:
+                    step0["suggestions"] = suggestions
+                messages.append({
+                    "type": "thinking",
+                    "content": "",
+                    "steps": [step0],
+                })
 
     await db.rollback()  # 只读查询归还连接
     return messages, roles

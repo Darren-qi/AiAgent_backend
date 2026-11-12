@@ -508,6 +508,13 @@ def get_loader() -> ProgressiveSkillLoader:
     global _global_loader
     if _global_loader is None:
         _global_loader = ProgressiveSkillLoader()
+        # 启动时引导（类 docstring 设计的第 1 步）。修复：此前全仓无人调用
+        # bootstrap → _index 恒空 → planner 的"## 可用工具"段恒为空白、
+        # JIT schema hint 也拿不到参数（2026-11-11 发现）
+        try:
+            _global_loader.bootstrap()
+        except Exception as e:  # noqa: BLE001 - 引导失败降级为空清单，不阻塞
+            logger.warning("[ProgressiveLoader] bootstrap 失败（技能清单降级为空）: %s", e)
     return _global_loader
 
 

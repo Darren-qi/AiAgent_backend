@@ -59,7 +59,9 @@ class PostgresSaver:
             session_id=session_id,
             role=role,
             content=content,
-            metadata=metadata,
+            # 映射属性是 message_metadata（列名 "metadata"）——传 metadata= 会被
+            # declarative 当普通实例属性遮蔽 MetaData，列恒 NULL（2026-11-12）
+            message_metadata=metadata,
             sequence=last_seq + 1,
         )
         self._session.add(message)

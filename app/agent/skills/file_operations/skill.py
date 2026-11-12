@@ -268,7 +268,7 @@ class FileOperationsSkill(BaseSkill):
             result.metadata["operation"] = "read_file"
             return result
         elif operation == "list":
-            result = await self._list_directory(file_path)
+            result = await self._list_directory(file_path, task_path)
             result.metadata = result.metadata or {}
             result.metadata["friendly_action"] = friendly_action
             result.metadata["operation"] = "list_dir"
@@ -276,7 +276,7 @@ class FileOperationsSkill(BaseSkill):
         elif operation == "delete":
             if not file_path:
                 return SkillResult(success=False, error="缺少 path 参数")
-            result = await self._delete_file(file_path)
+            result = await self._delete_file(file_path, task_path)
             result.metadata = result.metadata or {}
             result.metadata["friendly_action"] = friendly_action
             result.metadata["operation"] = "delete_file"
@@ -516,8 +516,9 @@ class FileOperationsSkill(BaseSkill):
                     prefixes = [
                         f"{project_name}_project/",      # flask_blog_project/
                         f"{project_name}-project/",      # flask_blog-project/
-                        f"{project_name}_",             # flask_blog_ (匹配 projectname_timestamp 整体)
-                        f"{project_name}/",             # flask_blog/
+                        f"{project_name}_",              # flask_blog_ (匹配 projectname_timestamp 整体)
+                        # 注意：不剥离裸 "{project_name}/" —— 项目恰好同名的子目录
+                        # （如 calculator/core.py）会被误压平成 core.py（2026-11-12 修复）
                     ]
                     matched = False
                     for prefix in prefixes:
@@ -655,6 +656,17 @@ class FileOperationsSkill(BaseSkill):
         try:
             path = Path(resolved_path)
             if not path.exists():
+                # 兼容历史压平写入：calculator/core.py 曾被落成 core.py，
+                # 若相对路径以裸项目名开头，剥前缀再试一次（读老文件仍能找到）
+                if project_root and not Path(file_path).is_absolute():
+                    m = re.match(r'^([a-zA-Z_][a-zA-Z0-9_]*)_\d+$', project_root)
+                    parts = Path(file_path).parts
+                    if m and len(parts) > 1 and parts[0] == m.group(1):
+                        alt = Path(self._tasks_dir) / project_root / Path(*parts[1:])
+                        if alt.is_file():
+                            logger.info(f"[FileOps] 读取回退到历史压平路径: {alt}")
+                            path = alt
+            if not path.exists():
                 # 改进错误信息，提供更有用的建议
                 error_msg = f"文件不存在: {file_path}"
                 if project_root:
@@ -678,21 +690,29 @@ class FileOperationsSkill(BaseSkill):
             logger.error(f"[FileOps] 读取文件失败: {e}")
             return SkillResult(success=False, error=str(e))
 
-    async def _list_directory(self, dir_path: str) -> SkillResult:
-        """列出目录"""
+    async def _list_directory(self, dir_path: str, task_path: Optional[str] = None) -> SkillResult:
+        """列出目录（相对路径基于任务目录，与 read 同规则——修复丢 task_path 落到 tasks 根）"""
         try:
+            project_root = task_path or self._allowed_project_root
             path = Path(dir_path)
             abs_path = dir_path
 
             if not path.is_absolute():
-                path = self._tasks_dir / dir_path
+                if project_root:
+                    path = self._tasks_dir / project_root / dir_path
+                else:
+                    path = self._tasks_dir / dir_path
                 abs_path = str(path.resolve())
 
             if not self._is_safe_path(abs_path):
                 return SkillResult(success=False, error=f"安全检查失败：禁止访问路径 {abs_path}")
 
             if not path.exists():
-                return SkillResult(success=False, error=f"目录不存在: {abs_path}")
+                error_msg = f"目录不存在: {abs_path}"
+                if project_root and not Path(dir_path).is_absolute():
+                    error_msg += f"\n项目目录: {project_root}"
+                    error_msg += "\n提示: 相对路径基于任务目录；先用 operation='list', path='.' 查看现有结构"
+                return SkillResult(success=False, error=error_msg)
             if not path.is_dir():
                 return SkillResult(success=False, error=f"路径是文件不是目录: {abs_path}")
 
@@ -715,14 +735,18 @@ class FileOperationsSkill(BaseSkill):
             logger.error(f"[FileOps] 列出目录失败: {e}")
             return SkillResult(success=False, error=str(e))
 
-    async def _delete_file(self, file_path: str) -> SkillResult:
-        """删除文件"""
+    async def _delete_file(self, file_path: str, task_path: Optional[str] = None) -> SkillResult:
+        """删除文件（相对路径基于任务目录——修复丢 task_path 误删 tasks 根同名文件）"""
         try:
+            project_root = task_path or self._allowed_project_root
             path = Path(file_path)
             abs_path = file_path
 
             if not path.is_absolute():
-                path = self._tasks_dir / file_path
+                if project_root:
+                    path = self._tasks_dir / project_root / file_path
+                else:
+                    path = self._tasks_dir / file_path
                 abs_path = str(path.resolve())
 
             if not self._is_safe_path(abs_path):

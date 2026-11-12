@@ -204,6 +204,10 @@ class AgentGraph:
         self._integrator = Integrator()
         self._guard = Guard()
         self._dynamic_subgraph = DynamicSubgraph()
+        # ContextManager（app/agent/context）：每 turn 在 execute() 内新建，
+        # step 钩子在 _execute_todo_with_loop 内调用；失败一律降级不阻塞主流程
+        self._ctx_mgr = None
+        self._ctx_step = 0
         self._supervisor = SupervisorGraph()
         self._replanner = Replanner()
         self._loop_detector = default_loop_detector
@@ -582,6 +586,27 @@ class AgentGraph:
         if on_step:
             on_step("planning", {"status": "开始执行任务"})
 
+        # ContextManager：本 turn 的上下文管理（turn=execute 一次）。
+        # 初始化失败只降级为"无上下文管理"，绝不阻塞任务执行。
+        self._ctx_step = 0
+        self._ctx_mgr = None
+        try:
+            from app.agent.context import ContextManager
+            from app.agent.context.embedding import ZhipuEmbedder
+            from app.core.config import get_settings
+            _embedder = ZhipuEmbedder()
+            self._ctx_mgr = ContextManager(
+                cfg=get_settings().build_context_config(),
+                embed_fn=_embedder.embed_one if _embedder.api_key else None,
+            )
+            self._ctx_mgr.on_session_start(
+                system_prompt="", constraints="", user_request=task)
+            logger.info("[CtxMgr] turn 开始，预算 %d tokens",
+                        self._ctx_mgr.cfg.max_tokens)
+        except Exception as _ce:
+            logger.warning("[CtxMgr] 初始化失败（本 turn 降级）: %s", _ce)
+            self._ctx_mgr = None
+
         try:
             # 检查是否已取消
             if self._check_cancelled():
@@ -731,6 +756,18 @@ class AgentGraph:
             if task_id:
                 task_manager.fail_task(task_id)
             return self._format_error(state.error, state)
+        finally:
+            # ContextManager turn 后钩子：重量级卸载/压缩/长循环折叠
+            # （全量淘汰唯一入口；挂在 finally 覆盖 execute 全部返回路径）
+            if self._ctx_mgr is not None:
+                try:
+                    _cr = self._ctx_mgr.on_turn_end()
+                    logger.info(
+                        "[CtxMgr] turn_end reason=%s saved=%d offloaded=%s folded=%s",
+                        _cr.reason, _cr.saved, _cr.offloaded, _cr.folded)
+                except Exception as _ce:
+                    logger.warning("[CtxMgr] on_turn_end 失败（不阻塞）: %s", _ce)
+                self._ctx_mgr = None
 
     def _create_execution_context(self, state: AgentState) -> ExecutionContext:
         """
@@ -1102,6 +1139,7 @@ class AgentGraph:
         _round_budget = max_loop_iterations
         _prev_missing: set = set()
         _written_files: set = set()
+        _prev_action = None   # 上一轮选中的技能（出错重试时按需注入其全量 schema）
 
         loop_idx = -1
         while True:
@@ -1137,6 +1175,25 @@ class AgentGraph:
             if last_error and loop_idx > 0:
                 thought_context += f"\n\n[上一步失败信息]\n错误: {last_error}\n执行结果: {last_execution_result}\n请分析失败原因，思考如何修正参数来解决问题。"
 
+            # ContextManager step 前钩子：召回(JIT) → 按预算重建本 step 上下文。
+            # 拼在既有 notes 之后（budget hint/目录/失败信息保持原位不动）。
+            if self._ctx_mgr is not None:
+                try:
+                    self._ctx_step += 1
+                    _bres = self._ctx_mgr.on_step_start(
+                        step=self._ctx_step, query=state.task)
+                    if _bres and _bres.prompt:
+                        thought_context += (
+                            "\n\n【本步上下文（按需召回的历史观察，重建式）】\n"
+                            + _bres.prompt)
+                    if _bres:
+                        logger.info(
+                            "[CtxMgr] step=%d used=%d/%d omitted=%d masked=%d",
+                            self._ctx_step, _bres.used_tokens, _bres.max_tokens,
+                            len(_bres.omitted), len(_bres.masked))
+                except Exception as _ce:
+                    logger.warning("[CtxMgr] on_step_start 失败（不阻塞）: %s", _ce)
+
             thought = await self._planner.think(state.task, todo_item.to_dict() if hasattr(todo_item, "to_dict") else todo, thought_context)
 
             # 检查取消（LLM 调用后）
@@ -1165,7 +1222,8 @@ class AgentGraph:
                 todo=todo_item.to_dict() if hasattr(todo_item, "to_dict") else todo,
                 thought=(thought or "") + _dir_note,
                 last_error=last_error,
-                last_result=last_execution_result
+                last_result=last_execution_result,
+                last_action=_prev_action,
             )
 
             # 检查取消（LLM 调用后）
@@ -1175,6 +1233,7 @@ class AgentGraph:
             action = plan_result.get("action", "general_response")
             params = plan_result.get("params", {})
             reason = plan_result.get("reason", "")
+            _prev_action = action
 
             # 确保 task_path 存在
             params = await self._ensure_task_path(params, action)
@@ -1251,6 +1310,28 @@ class AgentGraph:
             last_error = execution_result.get("error") or (
                 None if execution_result.get("success", False) else "执行失败"
             )
+
+            # ContextManager Observation 后钩子：登记观察 → 更新预算 →
+            # 预算超限才做 step 级 masking（全量压缩只在 turn 后）。
+            # persisted=True：观察已落 execution_nodes 表，被移除后可恢复。
+            if self._ctx_mgr is not None:
+                try:
+                    _obs_data = execution_result.get("data")
+                    _obs_content = (str(_obs_data) if _obs_data is not None
+                                    else str(last_error or ""))
+                    self._ctx_mgr.on_observation(
+                        obs_id=f"obs:{todo_id}:{self._ctx_step}",
+                        content=_obs_content[:4000],
+                        tool=str(action or ""),
+                        params_summary=str(merged_params)[:200],
+                        one_line=str(last_execution_result or last_error or ""),
+                        depends_on_action_step=self._ctx_step,
+                        persisted=True,
+                    )
+                    logger.info("[CtxMgr] obs registered id=%s:%d tool=%s",
+                                todo_id, self._ctx_step, str(action or ""))
+                except Exception as _ce:
+                    logger.warning("[CtxMgr] on_observation 失败（不阻塞）: %s", _ce)
 
             # 更新 scratchpad
             if self._state_manager:
