@@ -18,7 +18,7 @@ def event_loop():
 def mock_settings():
     """Mock settings fixture"""
     settings = MagicMock()
-    settings.app_name = "AiAgent Test"
+    settings.app_name = "RiffCode Test"
     settings.debug = True
     settings.database_url = "postgresql+asyncpg://test:test@localhost:5432/test_db"
     settings.redis_url = "redis://localhost:6379/0"

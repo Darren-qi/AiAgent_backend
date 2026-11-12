@@ -23,7 +23,7 @@ parameters:
     title:
       type: string
       description: "通知标题"
-      default: AiAgent 通知
+      default: RiffCode 通知
       required: false
     content:
       type: string

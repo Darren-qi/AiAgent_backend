@@ -117,7 +117,7 @@ class NotificationManager:
         self,
         channel: str = "email",
         recipient: str = "",
-        title: str = "AiAgent 通知",
+        title: str = "RiffCode 通知",
         content: str = "",
         **kwargs
     ) -> Dict[str, Any]:

@@ -1016,6 +1016,43 @@ async def delete_session_by_query(
     return {"success": True, "message": "deleted"}
 
 
+class SessionRenameIn(BaseModel):
+    title: str
+
+
+@router.patch("/sessions/{session_id}")
+async def rename_session(session_id: str, body: SessionRenameIn,
+                         user: OptionalCurrentUser = None) -> dict:
+    """重命名会话（前端左侧列表）：未登录 401，非管理员只能改自己的会话。"""
+    title = (body.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="会话名称不能为空")
+    if len(title) > 200:
+        raise HTTPException(status_code=400, detail="会话名称过长")
+    if user is None:
+        raise HTTPException(status_code=401, detail="请先登录")
+    try:
+        from sqlalchemy import select, update
+        async with AsyncSessionLocal() as db:
+            row = (await db.execute(select(SessionModel).where(
+                SessionModel.session_id == session_id))).scalar_one_or_none()
+            if row is None:
+                raise HTTPException(status_code=404, detail="会话不存在")
+            if user.get("role") != "admin" and row.user_id != user.get("id"):
+                raise HTTPException(status_code=403, detail="无权操作该会话")
+            # 不动 updated_at：重命名不是活动，避免会话排序被打乱
+            await db.execute(update(SessionModel).where(
+                SessionModel.session_id == session_id).values(title=title))
+            await db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 - 落库失败显式报错，不静默降级
+        logger.warning(f"[Agent] 重命名会话失败: {e}")
+        raise HTTPException(status_code=503, detail="重命名失败，请稍后重试")
+    return {"code": 200, "message": "success",
+            "data": {"session_id": session_id, "title": title}}
+
+
 # ---------- 文件读取 / 列表 / 下载（前端预览、重开会话恢复文件树） ----------
 # 前端约定：GET /agent/read-file/?file_path=xxx -> {code:0, data:{content}}
 # 路径相对 tasks 根目录（如 auto_project_x/a.md），文件树里的 path 已带任务目录前缀。

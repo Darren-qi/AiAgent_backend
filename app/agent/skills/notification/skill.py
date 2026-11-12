@@ -14,7 +14,7 @@ class NotificationSkill(BaseSkill):
     DEFAULT_PARAMETERS = [
         {"name": "channel", "type": "string", "required": False, "description": "通知渠道", "default": "email"},
         {"name": "recipient", "type": "string", "required": False, "description": "接收人/接收地址"},
-        {"name": "title", "type": "string", "required": False, "description": "通知标题", "default": "AiAgent 通知"},
+        {"name": "title", "type": "string", "required": False, "description": "通知标题", "default": "RiffCode 通知"},
         {"name": "content", "type": "string", "required": True, "description": "通知内容"},
     ]
 
@@ -28,7 +28,7 @@ class NotificationSkill(BaseSkill):
         channel = kwargs.get("channel", "email")
         recipient = kwargs.get("recipient", "")
         content = kwargs.get("content", "")
-        title = kwargs.get("title", "AiAgent 通知")
+        title = kwargs.get("title", "RiffCode 通知")
 
         if not content:
             return SkillResult(success=False, error="缺少 content 参数")

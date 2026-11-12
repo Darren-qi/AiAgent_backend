@@ -34,9 +34,9 @@ class Settings(BaseSettings):
     # =========================================
     # 应用信息
     # =========================================
-    app_name: str = Field(default="ai-agent-backend", description="应用名称")
+    app_name: str = Field(default="RiffCode", description="应用名称")
     app_version: str = Field(default="1.0.0", description="应用版本")
-    app_description: str = Field(default="AI Agent Backend API", description="应用描述")
+    app_description: str = Field(default="RiffCode Backend API", description="应用描述")
 
     # 环境标识: development | production
     environment: str = Field(default="development", description="运行环境")

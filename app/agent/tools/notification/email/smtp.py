@@ -19,7 +19,7 @@ class EmailSender:
         self.smtp_password = os.environ.get("SMTP_PASSWORD", "")
         self.use_tls = os.environ.get("SMTP_USE_TLS", "true").lower() == "true"
         self.from_email = os.environ.get("EMAILS_FROM_EMAIL", "")
-        self.from_name = os.environ.get("EMAILS_FROM_NAME", "AiAgent")
+        self.from_name = os.environ.get("EMAILS_FROM_NAME", "RiffCode")
 
     @property
     def is_configured(self) -> bool:
