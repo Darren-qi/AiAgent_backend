@@ -143,8 +143,8 @@ class Settings(BaseSettings):
     # =========================================
     # 上下文管理器（app/agent/context 的 ContextManager）
     # =========================================
-    context_max_tokens: int = Field(default=60000, description="上下文 token 预算")
-    context_compress_trigger_ratio: float = Field(default=0.7, description="超此比例触发压缩")
+    context_max_tokens: int = Field(default=128000, description="上下文 token 预算（2026-11-12 定 150K，同日修订对齐 deepseek-chat 窗口 128K：上限=触发点）")
+    context_compress_trigger_ratio: float = Field(default=1.0, description="恰好用满 128K 才触发压缩")
     context_compress_target_ratio: float = Field(default=0.5, description="压缩回目标比例")
     context_protect_recent_steps: int = Field(default=2, description="最近 N step 保护")
     context_turn_compress_min_steps: int = Field(default=10, description="长循环折叠阈值")

@@ -835,6 +835,7 @@ async def get_session(
     task_path = None
     title = ""
     db_messages = None
+    ctx_usage = None   # 实时上下文占用末值（会话 KV，2026-11-12 方案B）
 
     try:
         async with AsyncSessionLocal() as db:
@@ -854,6 +855,15 @@ async def get_session(
                 await db.rollback()
             except Exception:  # noqa: BLE001
                 task_path = None
+            try:
+                from app.agent.tools.session_context import get_session_context
+                ctx_usage = await get_session_context(session_id, "context_usage")
+                # 无 cc_ver=2 的旧值全是旧语义（折叠/卸载也计数）且硬限从未触发 → 显示前归零
+                if isinstance(ctx_usage, dict) and int(ctx_usage.get("cc_ver", 0) or 0) < 2:
+                    ctx_usage = {**ctx_usage, "compress_count": 0}
+                await db.rollback()
+            except Exception:  # noqa: BLE001
+                ctx_usage = None
             if not task_path:
                 task_path = session_task_paths.get(session_id)
             if task_path:
@@ -891,7 +901,8 @@ async def get_session(
                 "title": title,
                 "messages": [],
                 "file_tree": [],
-                "task_path": task_path
+                "task_path": task_path,
+                "context_usage": ctx_usage,
             }
         }
 
@@ -904,6 +915,7 @@ async def get_session(
             "messages": messages,
             "file_tree": file_tree,
             "task_path": task_path,
+            "context_usage": ctx_usage,
         }
     }
 

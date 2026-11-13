@@ -21,7 +21,7 @@ class TestHealthEndpoint:
             transport=ASGITransport(app=app),
             base_url="http://test"
         ) as client:
-            response = await client.get("/api/v1/health")
+            response = await client.get("/api/v1/health/health")  # 路由含 /health 子路径
             assert response.status_code == 200
             data = response.json()
             assert "status" in data or "message" in data
@@ -41,7 +41,7 @@ class TestAuthEndpoint:
         ) as client:
             response = await client.post(
                 "/api/v1/auth/login",
-                json={"username": "testuser", "password": "testpass"}
+                json={"username_or_email": "testuser", "password": "testpass"}
             )
             assert response.status_code in [200, 401]
 
@@ -56,7 +56,7 @@ class TestAuthEndpoint:
         ) as client:
             response = await client.post(
                 "/api/v1/auth/login",
-                json={"username": "wrong", "password": "wrong"}
+                json={"username_or_email": "wrong", "password": "wrong"}
             )
             assert response.status_code in [400, 401]
 
@@ -74,7 +74,7 @@ class TestAgentEndpoint:
             base_url="http://test"
         ) as client:
             response = await client.post(
-                "/api/v1/agent/execute",
+                "/api/v1/agent/execute/",   # 路由带尾斜杠，不加会307
                 json={
                     "task": "Say hello",
                     "context": {}
@@ -93,7 +93,7 @@ class TestAgentEndpoint:
             base_url="http://test"
         ) as client:
             response = await client.post(
-                "/api/v1/agent/execute",
+                "/api/v1/agent/execute/",   # 路由带尾斜杠，不加会307
                 json={"task": "Say hello", "context": {}}
             )
             assert response.status_code == 401
@@ -112,7 +112,7 @@ class TestConversationEndpoint:
             base_url="http://test"
         ) as client:
             response = await client.post(
-                "/api/v1/conversations/",
+                "/api/v1/session/create-session/",   # conversations 路由已下线，现为 session
                 json={"title": "Test Conversation"},
                 headers={"Authorization": "Bearer test-token"}
             )
@@ -132,7 +132,7 @@ class TestMemoryEndpoint:
             base_url="http://test"
         ) as client:
             response = await client.get(
-                "/api/v1/memory/session-123",
+                "/api/v1/session/session-123",   # memory 路由已下线，现为 session
                 headers={"Authorization": "Bearer test-token"}
             )
             assert response.status_code in [200, 401]

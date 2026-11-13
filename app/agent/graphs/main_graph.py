@@ -54,7 +54,13 @@ def _walk_dir(base: Path, current: Path) -> List[Dict[str, Any]]:
     return result
 
 
-_PROJECT_SEG_RE = re.compile(r"^(?:auto_project|app|project)(?:_\d+)?$")
+# 容器型项目目录段（剥前缀用）：任务目录名永远带 _<时间戳> 后缀
+# （skill create/auto-create 都会追加 _timestamp）。
+# 2026-11-13 修：旧正则连裸 "app"/"project" 也匹配，导致 Flask 项目的
+# app/__init__.py 被 _norm_rel 剥成根目录 __init__.py（生产 session_1794546906875
+# 观察原话"写入路径为任务目录根下的 __init__.py，而待办目标是 app/__init__.py"），
+# 根目录/子目录因此错乱、后续按子目录读取全部失败。
+_PROJECT_SEG_RE = re.compile(r"^(?:auto_project|app|project)_\d+$")
 
 
 def _norm_rel(p: str) -> str:
@@ -105,11 +111,15 @@ def _check_promised_files(
 
     missing: List[str] = []
     seen = set()
+    _basenames: Optional[set] = None
     for c in candidates:
         c = c.strip().strip('`"\'').replace("\\", "/")
         if not c or c in seen or re.match(r"^(https?|ftp)://", c, re.I):
             continue
-        seen.add(c)
+        # 注意：这里不能提前 seen.add(c)——下面 _norm_rel 规范化后还有一次
+        # `c in seen` 去重，提前登记会让未被改写的裸相对路径（ghost.py 等）
+        # 永远在第二次判定处被 continue，存在性检查形同虚设
+        # （2026-11-13 修：生产只有被剥前缀改写的路径才会被报缺失）
         # 格式过滤：只校验"文件形态"的提及（basename 带扩展名、不含空格），跳过目录/概念
         base = c.rstrip("/").split("/")[-1]
         if " " in c or "." not in base:
@@ -124,7 +134,24 @@ def _check_promised_files(
             continue
         seen.add(c)
         if base_dir and not (base_dir / c).exists():
-            missing.append(c)
+            # 裸文件名（不含 /）兜底：同名文件已在子目录（承诺 extensions.py、
+            # 实际 app/extensions.py）→ 视为已存在。否则失败的错误路径
+            # （read extensions.py）会进候选、被误报缺失，逼模型在根目录
+            # 写出重复文件（2026-11-13 生产取证：__init__.py 被误报缺失后
+            # 模型在根目录补写了一份）。带前缀的路径仍精确匹配。
+            # 2026-11-13 生产取证（任务93重构）：move 之后旧路径 app/extensions.py
+            # 按根相对找不到就报"不存在"，其实文件已在 backend/app/ 下——带斜杠
+            # 的提及同样做 basename 子目录兜底（文件出现在任务目录任何位置的
+            # 文件结构里即算存在），否则归类后连续三轮误报缺失逼模型重找。
+            if _basenames is None:
+                _basenames = set()
+                try:
+                    for _br, _bd, _bfs in os.walk(base_dir):
+                        _basenames.update(_bfs)
+                except Exception:
+                    pass
+            if base not in _basenames:
+                missing.append(c)
     return missing
 
 
@@ -208,13 +235,28 @@ class AgentGraph:
         # step 钩子在 _execute_todo_with_loop 内调用；失败一律降级不阻塞主流程
         self._ctx_mgr = None
         self._ctx_step = 0
+        self._ctx_compress_count = 0   # 本会话累计压缩次数（跨 turn 从会话 KV 续读）
+        self._ctx_floor = 0            # 用量底线=上轮真实峰值（KV 续读，跨轮不归零）
+        self._ctx_peak = 0             # 本轮已推送的真实峰值
         self._supervisor = SupervisorGraph()
         self._replanner = Replanner()
         self._loop_detector = default_loop_detector
         self._db_session = None  # 数据库会话
         self._session_id = None  # 当前会话ID
         self._task_id = None     # 当前任务ID
+        # 写后读回跳过状态（规则13硬约束，2026-11-13"避免反复读取"）：
+        # 按会话记 {prev_op, last_write, read_files}，单例并发下不串会话；
+        # turn 边界 _reset_readback_turn() 全清（跨 turn 上下文是摘要）
+        self._readback_guard: Dict[str, Dict[str, Any]] = {}
         self._state_manager: Optional[ExecutionStateManager] = None  # 执行状态管理器
+
+    def _reset_readback_turn(self, session_id: Optional[str] = None) -> None:
+        """新对话轮开始：清空该会话的读回守卫状态。
+
+        跨 turn 的上下文是摘要（不是全文），上一 turn 读过/写过的文件在
+        本 turn 都可能需要真读一次——不清会把合法首读误跳掉。
+        """
+        self._readback_guard.pop(session_id or "__none__", None)
 
     def cancel(self):
         """取消当前执行"""
@@ -506,6 +548,11 @@ class AgentGraph:
         error = result.get("error")
 
         if success:
+            data = result.get("data") or {}
+            if isinstance(data, dict) and data.get("skipped"):
+                # 读回被跳过（ReadbackGuard）——原样透传给前端，别显示
+                # 成"执行成功"让人以为读到了内容
+                return data.get("message") or "完成：跳过重复读取"
             if files:
                 file_names = [f.get("name", f.get("rel_path", "未知文件")) for f in files]
                 if len(file_names) == 1:
@@ -566,6 +613,8 @@ class AgentGraph:
         # 优先从 context 中获取 session_id 和 task_id
         if session_id is None:
             session_id = state.context.get("session_id")
+        # 新对话轮：清空读回守卫（跨 turn 上下文是摘要，首读不能跳）
+        self._reset_readback_turn(session_id)
         if task_id is None:
             task_id = state.context.get("task_id")
 
@@ -606,6 +655,27 @@ class AgentGraph:
         except Exception as _ce:
             logger.warning("[CtxMgr] 初始化失败（本 turn 降级）: %s", _ce)
             self._ctx_mgr = None
+
+        # 上下文用量：跨 turn 续读压缩次数 + 上轮真实用量底线（会话 KV），失败降级为 0
+        self._ctx_compress_count = 0
+        self._ctx_floor = 0
+        self._ctx_peak = 0
+        if session_id:
+            try:
+                from app.agent.tools.session_context import get_session_context
+                _stored = await get_session_context(session_id, "context_usage")
+                if isinstance(_stored, dict):
+                    # cc_ver>=2（2026-11-13）：compress_count 仅计 100% 硬限压缩。
+                    # 无版本标记的旧值全是旧语义（折叠/卸载也计数），且当时硬限从未触发
+                    # （生产实测最大 used=8138/128000）→ 归零，不继承旧计数
+                    if int(_stored.get("cc_ver", 0) or 0) >= 2:
+                        self._ctx_compress_count = int(_stored.get("compress_count", 0) or 0)
+                    else:
+                        self._ctx_compress_count = 0
+                    self._ctx_floor = int(_stored.get("used", 0) or 0)
+                    self._ctx_peak = self._ctx_floor
+            except Exception as _se:
+                logger.debug("[CtxMgr] 用量续读失败（降级 0）: %s", _se)
 
         try:
             # 检查是否已取消
@@ -765,8 +835,37 @@ class AgentGraph:
                     logger.info(
                         "[CtxMgr] turn_end reason=%s saved=%d offloaded=%s folded=%s",
                         _cr.reason, _cr.saved, _cr.offloaded, _cr.folded)
+                    # 仅"达到 100% 上限"的真压缩计数（2026-11-13 用户定，对齐 Hermes 计数语义：
+                    # 长循环折叠/卸载/摘要是常规整理，不计入"压缩次数"）
+                    if _cr.reason == "budget":
+                        self._ctx_compress_count += 1
                 except Exception as _ce:
                     logger.warning("[CtxMgr] on_turn_end 失败（不阻塞）: %s", _ce)
+                # turn 收尾：推送压缩后的实时用量 + 持久化到会话 KV（刷新可恢复）
+                try:
+                    import asyncio as _aio
+                    from app.agent.tools.session_context import set_session_context
+                    _max = self._ctx_mgr.cfg.max_tokens
+                    # 11-13：报本轮真实峰值（接续 floor），不再用重建片段 budget.used
+                    _used = max(
+                        getattr(self, "_ctx_peak", 0),
+                        getattr(self, "_ctx_floor", 0),
+                    )
+                    _payload = {
+                        "used": _used,
+                        "max": _max,
+                        "ratio": round(_used / _max, 4) if _max else 0.0,
+                        "compress_count": self._ctx_compress_count,
+                        "cc_ver": 2,
+                        "step": self._ctx_step,
+                    }
+                    if on_step:
+                        on_step("context_usage", _payload)
+                    if session_id:
+                        _aio.create_task(set_session_context(
+                            session_id, "context_usage", _payload))
+                except Exception as _pe:
+                    logger.warning("[CtxMgr] 用量推送/持久化失败（不阻塞）: %s", _pe)
                 self._ctx_mgr = None
 
     def _create_execution_context(self, state: AgentState) -> ExecutionContext:
@@ -1133,13 +1232,16 @@ class AgentGraph:
         # 追踪工具调用历史，防止相同调用重复3次以上
         tool_call_history = []
         max_same_call = 3
-        # 轮次预算：默认5轮；缺失清单每缩短一次（实质进展）追加2轮、上限12。
+        # 轮次预算：默认5轮；缺失清单每缩短一次（实质进展）追加2轮、上限16。
         # 否则"一个待办多个文件、每轮只落盘1个"会被固定5轮掐死
-        # （2026-11-09 生产 task23：6文件待办写到第5轮、还差2个文件被判失败）
+        # （2026-11-09 生产 task23：6文件待办写到第5轮、还差2个文件被判失败；
+        #  2026-11-13 task82 手动测试：归类待办根目录11项，上限12零容错搬不完）
         _round_budget = max_loop_iterations
         _prev_missing: set = set()
         _written_files: set = set()
         _prev_action = None   # 上一轮选中的技能（出错重试时按需注入其全量 schema）
+        _fail_refunds = 0     # 工具执行失败的退轮次数（最多3次，防死循环）
+        _skip_refunds = 0     # 跳过（重复读/写后读回）的退轮次数（最多3次）
 
         loop_idx = -1
         while True:
@@ -1164,7 +1266,19 @@ class AgentGraph:
             if hist_note:
                 thought_context += "\n\n" + hist_note
             logger.info("[Loop] think start todo=%s loop=%s", todo_id, loop_idx + 1)
+            # 文件类任务开局先锚定任务目录（2026-11-13 任务86取证：新会话
+            # task_path 为空 → list/search/read 全落到 tasks/ 根，37 个跨任务
+            # 目录泄漏进观察、裸路径反复"文件不存在"，模型开局连读失败）。
+            # 锚定后：清单注入、list "."、read/search 全部以本任务目录为基准，
+            # 模型开局即知道目录是空的 → 先搭框架而不是读不存在的文件。
+            if not context_obj.task_path and getattr(state, "intent", None) in (
+                "file_ops", "code", "data", "crawler"
+            ):
+                _tp0 = await self._ensure_session_task_dir(context_obj)
+                if _tp0:
+                    logger.info(f"[Loop] 文件类任务开局锚定任务目录: {_tp0}")
             _dir_note = ""
+            _dir_files_note = ""
             if context_obj.task_path:
                 _dir_note = (
                     f"\n\n[任务目录] {context_obj.task_path}（磁盘: tasks/{context_obj.task_path}）。"
@@ -1172,8 +1286,37 @@ class AgentGraph:
                     "禁止在 path 中重复写任务目录名或其他项目目录名（如 app_xxx/src/...）。"
                 )
                 thought_context += _dir_note
+                # 磁盘文件清单注入思考/计划端（此前只注入观察端——
+                # 2026-11-13 生产取证：思考端只拿到目录名提示，模型凭待办
+                # 文字猜路径，反复按裸名 read extensions.py 失败 4 次）
+                try:
+                    from app.agent.skills.file_operations.skill import get_tasks_dir as _gtd0
+                    _base0 = _gtd0() / context_obj.task_path
+                    if _base0.is_dir():
+                        _fl0 = []
+                        for _r0, _d0, _fs0 in os.walk(_base0):
+                            for _f0 in _fs0:
+                                try:
+                                    _fl0.append(str(Path(_r0, _f0).relative_to(_base0)))
+                                except Exception:
+                                    pass
+                        _dir_files_note = "\n\n【任务目录现有文件】\n" + (
+                            "\n".join(sorted(_fl0)) if _fl0 else "（空，尚未生成任何文件）")
+                        thought_context += _dir_files_note
+                except Exception:
+                    _dir_files_note = ""
             if last_error and loop_idx > 0:
                 thought_context += f"\n\n[上一步失败信息]\n错误: {last_error}\n执行结果: {last_execution_result}\n请分析失败原因，思考如何修正参数来解决问题。"
+
+            # 末轮强制交付（2026-11-13 生产 todo1 取证：5 轮全在 read/list 翻文件、
+            # 从未进入产出，轮次耗尽即 FAILED 且无降级 → 在最后一轮强制收敛）
+            if loop_idx + 1 >= _round_budget:
+                thought_context += (
+                    "\n\n【最后一轮 · 强制交付】这是本待办的最后一轮预算。"
+                    "禁止再收集信息（不要再 search/read/list）；必须基于已有信息"
+                    "立即产出交付物（写文件或给出最终答复）。产出不完美也必须交付；"
+                    "本轮结束仍未产出，本待办将判定失败。"
+                )
 
             # ContextManager step 前钩子：召回(JIT) → 按预算重建本 step 上下文。
             # 拼在既有 notes 之后（budget hint/目录/失败信息保持原位不动）。
@@ -1191,6 +1334,28 @@ class AgentGraph:
                             "[CtxMgr] step=%d used=%d/%d omitted=%d masked=%d",
                             self._ctx_step, _bres.used_tokens, _bres.max_tokens,
                             len(_bres.omitted), len(_bres.masked))
+                        # 实时上下文占用 → 前端工具栏（2026-11-12 方案B；
+                        # 11-13 修为真实值：分子=本步完整提示词 token 数
+                        # （含 history_note/预算提示/目录与失败信息/召回片段），
+                        # 并接续上轮峰值 floor → 跨轮不再从 0 开始）
+                        if on_step:
+                            try:
+                                from app.agent.context import count_tokens as _ctok
+                                _max_u = self._ctx_mgr.cfg.max_tokens
+                                # 本步完整上下文 token（系统提示词在 Planner 内部拼）
+                                _real_u = _ctok(thought_context)
+                                _used_u = max(self._ctx_floor, _real_u)
+                                if _used_u > self._ctx_peak:
+                                    self._ctx_peak = _used_u
+                                on_step("context_usage", {
+                                    "used": _used_u,
+                                    "max": _max_u,
+                                    "ratio": round(_used_u / _max_u, 4) if _max_u else 0.0,
+                                    "compress_count": self._ctx_compress_count,
+                                    "step": self._ctx_step,
+                                })
+                            except Exception:
+                                pass
                 except Exception as _ce:
                     logger.warning("[CtxMgr] on_step_start 失败（不阻塞）: %s", _ce)
 
@@ -1220,7 +1385,7 @@ class AgentGraph:
             plan_result = await self._planner.plan_action_with_feedback(
                 task=state.task,
                 todo=todo_item.to_dict() if hasattr(todo_item, "to_dict") else todo,
-                thought=(thought or "") + _dir_note,
+                thought=(thought or "") + _dir_note + _dir_files_note,
                 last_error=last_error,
                 last_result=last_execution_result,
                 last_action=_prev_action,
@@ -1237,6 +1402,16 @@ class AgentGraph:
 
             # 确保 task_path 存在
             params = await self._ensure_task_path(params, action)
+            # 文件族动作强制锚定任务目录，含 search_files（之前不在
+            # _ensure_task_path 集合里 → 无目录时直接搜 tasks/ 根，跨任务
+            # 泄漏；2026-11-13 任务86取证）。context 回填 + params 同步。
+            if action in ("file_operations", "search_files", "code_generator",
+                          "add_files_to_project", "improve_file"):
+                if not context_obj.task_path:
+                    await self._ensure_session_task_dir(context_obj)
+                if context_obj.task_path and params.get("task_path") != context_obj.task_path:
+                    params = params.copy()
+                    params["task_path"] = context_obj.task_path
 
             # 更新 todo_item 的 action 和 params
             todo_item.action = action
@@ -1353,27 +1528,9 @@ class AgentGraph:
             )
 
             # === Observation 阶段 ===
-            # 观察前注入任务目录现有文件清单（磁盘真相），让观察结论有据可查：
-            # 否则观察只能靠复述思考里的计划清单盲判（生产实测 todo0 因此
-            # 反复声称"仍需补全"已存在的文件，原地重写直至轮次耗尽失败）
-            _dir_files_note = ""
-            try:
-                from app.agent.skills.file_operations.skill import get_tasks_dir as _gtd0
-                _tp0 = context_obj.task_path or merged_params.get("task_path")
-                _base0 = (_gtd0() / _tp0) if _tp0 else None
-                if _base0 and os.path.isdir(_base0):
-                    _fl0 = []
-                    for _r0, _d0, _fs0 in os.walk(_base0):
-                        for _f0 in _fs0:
-                            try:
-                                _fl0.append(str(Path(_r0, _f0).relative_to(_base0)))
-                            except Exception:
-                                pass
-                    _dir_files_note = "\n\n【任务目录现有文件】\n" + (
-                        "\n".join(sorted(_fl0)) if _fl0 else "（空，尚未生成任何文件）"
-                    )
-            except Exception:
-                _dir_files_note = ""
+            # 任务目录现有文件清单（磁盘真相）在本轮循环开始时已构建（_dir_files_note），
+            # 观察与思考/计划端共用同一份清单（此前只注入观察端，思考端凭待办文字猜路径
+            # 反复按裸名 read 失败）
             observation_result = await self._planner.observe(
                 state.task, todo_item.to_dict() if hasattr(todo_item, "to_dict") else todo,
                 action, merged_params, execution_result,
@@ -1406,34 +1563,79 @@ class AgentGraph:
             if _missing:
                 _cur_missing = set(_missing)
                 if _prev_missing and _cur_missing < _prev_missing:
-                    # 缺失清单缩短 = 实质进展：追加轮次预算（上限12）
-                    _round_budget = min(_round_budget + 2, 12)
+                    # 缺失清单缩短 = 实质进展：追加轮次预算（上限16）
+                    _round_budget = min(_round_budget + 2, 16)
                     logger.info(
                         "[AgentGraph] 待办 %s 缺失文件有进展(%s->%s)，轮次预算增至 %s",
                         todo_id, len(_prev_missing), len(_cur_missing), _round_budget,
                     )
                 _prev_missing = _cur_missing
-            # 本轮成功落盘新文件 = 实质进展：追加轮次预算（上限12）。
-            # 只对写类动作计：读操作/重复覆盖已有文件不算进展
+            # 本轮成功落盘新文件 = 实质进展：追加轮次预算（上限16）。
+            # 只对写类动作计：读操作/重复覆盖已有文件不算进展。
+            # 2026-11-13 TC-S16-01 取证：批量参数（files/paths）没有顶层
+            # path → _np 恒空、delete 不在白名单 → 批量写/删从不给预算续命，
+            # todo4 第5轮被掐死判失败。改为：单 path + files[] + paths[] 都算，
+            # op 白名单加 delete（清理残留也是实质进展）。
             _op = merged_params.get("operation")
             if execution_result.get("success") and action in (
                 "file_operations", "code_generator", "add_files_to_project", "improve_file"
-            ) and (action != "file_operations" or _op in ("write", "create", "edit")):
-                _np = _norm_rel(str(merged_params.get("path") or merged_params.get("output_path") or ""))
-                if _np and _np not in _written_files:
-                    _written_files.add(_np)
-                    if _round_budget < 12:
-                        _round_budget = min(_round_budget + 2, 12)
-                        logger.info("[AgentGraph] 待办 %s 落盘新文件 %s，轮次预算增至 %s", todo_id, _np, _round_budget)
+            ) and (action != "file_operations" or _op in ("write", "create", "edit", "move", "delete")):
+                _cands = [str(merged_params.get("path") or merged_params.get("output_path") or "")]
+                for _it in (merged_params.get("files") or []):
+                    if isinstance(_it, dict):
+                        _cands.append(str(_it.get("path") or _it.get("from")
+                                          or _it.get("src") or ""))
+                    elif isinstance(_it, str):
+                        _cands.append(_it)
+                for _it in (merged_params.get("paths") or []):
+                    if isinstance(_it, str):
+                        _cands.append(_it)
+                _new_np = []
+                for _c in _cands:
+                    _c = _norm_rel(_c)
+                    if _c and _c not in _written_files:
+                        _written_files.add(_c)
+                        _new_np.append(_c)
+                if _new_np:
+                    if _round_budget < 16:
+                        _round_budget = min(_round_budget + 2, 16)
+                        logger.info(
+                            "[AgentGraph] 待办 %s 实质进展 %s，轮次预算增至 %s",
+                            todo_id, _new_np[:4], _round_budget)
+            # 工具执行失败不产进展却烧预算：退1轮给"修正参数重试"
+            # （2026-11-13 用户测试：edit 缺 old_text 失败后模型绕只读动作，
+            # 5 轮预算烧尽、待办判失败；最多退 3 轮防死循环）
+            if not execution_result.get("success", False) and _fail_refunds < 3:
+                _fail_refunds += 1
+                _round_budget = min(_round_budget + 1, 19)
+                logger.info(
+                    "[AgentGraph] 待办 %s 工具执行失败，退1轮预算(增至%s)，允许修正参数重试(第%s次)",
+                    todo_id, _round_budget, _fail_refunds,
+                )
+            # 跳过（重复读/写后读回）不产进展却烧预算：退1轮给"动手改"的
+            # 机会（生产 2026-11-14 00:12 第三轮：5 轮全 read 烧光判失败）
+            _d = execution_result.get("data")
+            if isinstance(_d, dict) and _d.get("skipped") and _skip_refunds < 3:
+                _skip_refunds += 1
+                _round_budget = min(_round_budget + 1, 19)
+                logger.info(
+                    "[AgentGraph] 待办 %s 跳过不产进展却烧预算，退1轮预算(增至%s)，"
+                    "强制动手改(第%s次)", todo_id, _round_budget, _skip_refunds,
+                )
             _miss_msg = ""
             if _missing:
+                # 任务目录放句首并写明查找根（2026-11-13 用户反馈：细节里
+                # 只在尾部括号带一句、路径全是相对路径，看起来"没带任务目录
+                # 从下一级开始找"）。句首先声明这是待办缺件、不是本步动作
+                # 失败（read 轮后面跟着它，会被误读成"读取文件失败"）。
                 _miss_msg = (
-                    "以下文件在本待办过程中提到但任务目录中不存在: "
+                    (f"本待办未完成（本步操作已成功，非操作失败）：对照任务目录 {_tp} 按相对路径检查，"
+                     "以下承诺产出文件尚未创建: " if _tp
+                     else "本待办未完成（非操作失败）：以下承诺产出文件尚未创建: ")
                     + ", ".join(_missing)
                     + "。必须真实创建这些文件（写入磁盘）后本待办才算完成；"
                     "已存在的文件不要重复创建，本轮只写上面缺失的文件；"
                     "若不属于本待办产出，就不要在思考/计划中提及它们。"
-                    + (f"（任务目录: {_tp}，path 写目录内相对路径）" if _tp else "")
                 )
                 logger.warning("[AgentGraph] 待办 %s 提到的文件未生成: %s", todo_id, _missing)
                 observation_result["completed"] = False
@@ -1450,7 +1652,14 @@ class AgentGraph:
                 # （生产实测：todo0 盲写12轮直至轮次耗尽失败的直接原因）
                 last_error = str(observation_result.get("reason") or "上一轮观察判断未完成")
 
-            obs_content = f"完成状态: {'已完成' if observation_result.get('completed', False) else '未完成'}\n"
+            _skip_note = ""
+            _sd = execution_result.get("data")
+            if isinstance(_sd, dict) and _sd.get("skipped"):
+                _fl = ", ".join(_sd.get("files") or [])
+                _skip_note = (f"本步已跳过读取（{_sd.get('skipped')}"
+                              + (f"，文件: {_fl}" if _fl else "")
+                              + "）：内容仍在上下文，无需重复读取。\n")
+            obs_content = _skip_note + f"完成状态: {'已完成' if observation_result.get('completed', False) else '未完成'}\n"
             obs_content += f"原因: {observation_result.get('reason', '')}\n"
             obs_content += f"建议: {observation_result.get('suggestion', '')}"
 
@@ -1596,6 +1805,51 @@ class AgentGraph:
             "iteration": max_loop_iterations,
             "action": action,
         }
+
+    async def _ensure_session_task_dir(self, context_obj) -> Optional[str]:
+        """锚定/创建会话任务目录，返回 task_path（失败/无会话返回 None）。
+
+        2026-11-13 任务86根因：新会话 task_path 为空时，file_operations 的
+        list/read、search_files 的 search 全部解析到 tasks/ 根目录——
+        ① 观察里混入 37 个其他任务的目录（跨任务泄漏）② 模型看到别的任务里
+        有 extensions.py，按裸名 read 永远落在 tasks 根 → 反复"文件不存在"
+        ③ 文件清单注入也因无 task_path 被跳过。这里在文件族动作前把目录
+        建好（沿用 skill 的 auto_project_<ts> 命名），并按既有落盘回写三件套
+        同步 context/session_task_paths/SessionContext 表。
+        """
+        if getattr(context_obj, "task_path", None):
+            return context_obj.task_path
+        if not self._session_id:
+            return None
+        # 内存优先（落盘后先写这里），再回落 DB
+        existing: Optional[str] = None
+        try:
+            from app.api.v1.endpoints.agent import session_task_paths
+            existing = session_task_paths.get(self._session_id)
+        except Exception:
+            existing = None
+        if not existing:
+            existing = await self._get_session_task_path()
+        if existing:
+            context_obj.task_path = existing
+            return existing
+        import time as _time
+        name = f"auto_project_{int(_time.time())}"
+        try:
+            from app.agent.skills.file_operations.skill import get_tasks_dir
+            (get_tasks_dir() / name).mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"[AgentGraph] 创建任务目录失败: {e}")
+            return None
+        context_obj.task_path = name
+        try:
+            from app.api.v1.endpoints.agent import session_task_paths
+            session_task_paths[self._session_id] = name
+            from app.agent.tools.session_context import set_session_context
+            await set_session_context(self._session_id, "task_path", name)
+        except Exception as e:
+            logger.debug(f"[AgentGraph] 持久化 task_path 失败: {e}")
+        return name
 
     async def _ensure_task_path(self, params: Dict[str, Any], action: str) -> Dict[str, Any]:
         """确保写文件类 action 始终用**同一个**任务目录（目录中途变换的根因）。
@@ -1798,6 +2052,79 @@ class AgentGraph:
         """执行单个步骤"""
         action = step.get("action", "unknown")
         params = step.get("params", {}).copy()
+        _op = (params.get("operation") or "").lower() \
+            if action == "file_operations" else ""
+        _gk = session_id or "__none__"
+        _guard = self._readback_guard.setdefault(
+            _gk, {"prev_op": "", "last_write": set()})
+
+        # 写后读回硬跳过（规则13软引导三遍真跑两遍仍有确认读，上执行层）：
+        # 上一动作是 write、本次 read 的文件全部在刚写列表里 → 纯确认读，
+        # 不执行（内容还在上下文），直接给跳过反馈让模型按缺件清单推进。
+        if (_op == "read" and _guard["prev_op"] == "write"
+                and _guard["last_write"]):
+            _rp = set()
+            for f in (params.get("files") or []):
+                _rp.add((f.get("path") or "") if isinstance(f, dict) else str(f))
+            if params.get("path"):
+                _rp.add(str(params["path"]))
+            _rp.discard("")
+            if _rp and _rp <= _guard["last_write"]:
+                _guard["prev_op"] = "read"
+                _guard.setdefault("read_files", set()).update(_rp)
+                logger.info(f"[ReadbackGuard] 跳过写后读回: {sorted(_rp)}")
+                return {
+                    "success": True,
+                    "data": {
+                        "skipped": "read_after_write",
+                        "message": (
+                            "已跳过写后读回：刚写入的内容仍在上下文，无需再读。"
+                            "直接根据完成判定的缺件清单，批量写入缺失文件推进。"
+                        ),
+                        "files": sorted(_rp),
+                    },
+                    "error": None,
+                    "action": action,
+                }
+        # 重复读跳过（生产 2026-11-14 00:12 第三轮空转：router/index.js 读
+        # 3 遍、App.vue 2 遍，5 轮预算烧光判失败）——同 turn 同文件第 2 次
+        # read 起内容已在上下文，跳过并强指令动手；循环层给它退 1 轮预算。
+        if _op == "read":
+            _rp = set()
+            for f in (params.get("files") or []):
+                _rp.add((f.get("path") or "") if isinstance(f, dict) else str(f))
+            if params.get("path"):
+                _rp.add(str(params["path"]))
+            _rp.discard("")
+            _seen = _guard.setdefault("read_files", set())
+            if _rp and _rp <= _seen:
+                _guard["prev_op"] = "read"
+                logger.info(f"[ReadbackGuard] 跳过重复读: {sorted(_rp)}")
+                return {
+                    "success": True,
+                    "data": {
+                        "skipped": "duplicate_read",
+                        "message": (
+                            f"已跳过重复读取（{'、'.join(sorted(_rp))}）："
+                            "内容仍在上下文，禁止再读。本待办尚未完成，"
+                            "必须本轮直接动手 edit/write 做出修改，"
+                            "再读同一文件不会推进任何进展。"
+                        ),
+                        "files": sorted(_rp),
+                    },
+                    "error": None,
+                    "action": action,
+                }
+            _seen.update(_rp)
+        _guard["prev_op"] = _op
+        _write_paths = set()
+        if _op == "write":
+            for f in (params.get("files") or []):
+                _write_paths.add(
+                    (f.get("path") or "") if isinstance(f, dict) else str(f))
+            if params.get("path"):
+                _write_paths.add(str(params["path"]))
+            _write_paths.discard("")
 
         # 传递 task_path 到 skill，让它能正确写入 AiAgent/tasks/
         if task_path:
@@ -1811,6 +2138,9 @@ class AgentGraph:
             from app.agent.skills.core.progressive_loader import get_loader
             loader = get_loader()
             result = await loader.execute(action, params)
+            if _op == "write":
+                _guard["last_write"] = (
+                    _write_paths if result.success else set())
             # 优先使用 skill 返回的 friendly_action
             friendly_action = result.metadata.get("friendly_action") if result.metadata else None
             return {
@@ -1826,6 +2156,9 @@ class AgentGraph:
                 skill = registry.get(action)
                 if skill:
                     result = await skill.execute(**params)
+                    if _op == "write":
+                        _guard["last_write"] = (
+                            _write_paths if result.success else set())
                     friendly_action = result.metadata.get("friendly_action") if result.metadata else None
                     return {
                         "success": result.success,
@@ -1836,6 +2169,8 @@ class AgentGraph:
             except:
                 pass
 
+            if _op == "write":
+                _guard["last_write"] = set()
             return {
                 "success": False,
                 "error": str(e),

@@ -231,5 +231,81 @@ def test_recall_skips_when_below_threshold():
     assert mgr.items["k1"].state == LoadState.INDEX_ONLY
 
 
+# ── 10. 大观察截断存档（truncate-and-store，对齐 Hermes snapshot）──
+
+def test_observation_truncated_and_stored():
+    cfg = ContextConfig(obs_full_chars=500)
+    mgr = ContextManager(cfg=cfg)
+    mgr.on_session_start("SYS", "", "REQ")
+    big = "x" * 2000
+    add_obs(mgr, "o_big", big, step=1, tool="read_file", one_line="读了大文件")
+    it = mgr.items["o_big"]
+    assert len(it.content) < 2000, "进上下文的应是截断后内容"
+    assert "已截断" in it.content
+    assert it.external_ref, "全文必须存档留指针"
+    assert mgr.load_by_ref(it.external_ref) == big, "原文可恢复"
+    assert it.token_count < count_tokens(big), "预算按截断后内容计"
+
+
+# ── 11. turn 内主动卸载：重复观察去重 + 过期观察降级（对齐 Hermes _prune_old_tool_results）──
+
+def test_proactive_prune_dedup_and_stale():
+    cfg = ContextConfig(protect_recent_steps=2, max_tokens=100000)
+    mgr = ContextManager(cfg=cfg)
+    mgr.on_session_start("SYS", "", "REQ")
+    # 同 tool+params 连读两次（不同内容）+ 一条过期观察
+    mgr.on_observation("r_stale", "other file body", tool="read_file",
+                       params_summary="other.py", one_line="r_stale", step=1)
+    mgr.on_observation("r1", "v1 body", tool="read_file",
+                       params_summary="app.py", one_line="r1", step=3)
+    mgr.on_observation("r2", "v2 body", tool="read_file",
+                       params_summary="app.py", one_line="r2", step=4)
+    build = mgr.on_step_start(step=6, query="")
+    # 去重：同 params 只留最新（r2 全文），r1 降级后又超龄 → 出上下文
+    r2 = mgr.items["r2"]
+    assert r2.state == LoadState.LOADED and not r2.masked
+    assert r2.content == "v2 body"
+    assert mgr.items["r1"].state == LoadState.INDEX_ONLY
+    # 过期：r_stale 超租约 → 一行摘要，原文存外部可恢复
+    stale = mgr.items["r_stale"]
+    assert stale.masked and "other file body" not in stale.content
+    assert stale.external_ref
+    assert mgr.load_by_ref(str(stale.external_ref)) == "other file body"
+    # 摘要（含 one_line）与最新全文都在本步 prompt 里
+    assert "v2 body" in build.prompt
+    assert "other file body" not in build.prompt
+    assert any("主动卸载" in d for d in mgr.decisions_log())
+
+
+def test_proactive_prune_respects_protect_window():
+    """保护窗内的新观察不动。"""
+    cfg = ContextConfig(protect_recent_steps=2, max_tokens=100000)
+    mgr = ContextManager(cfg=cfg)
+    mgr.on_session_start("SYS", "", "REQ")
+    mgr.on_observation("n1", "recent body", tool="read_file",
+                       params_summary="a.py", one_line="n1", step=4)
+    build = mgr.on_step_start(step=5, query="")
+    it = mgr.items["n1"]
+    assert not it.masked and it.state == LoadState.LOADED
+    assert "recent body" in build.prompt
+
+
+# ── 12. 计数契约：未达 100% 硬限的折叠 reason=long_loop（不计压缩次数）──
+
+def test_long_loop_reason_is_not_budget():
+    cfg = ContextConfig(max_tokens=100000, compress_trigger_ratio=1.0,
+                        turn_compress_min_steps=3)
+    mgr = ContextManager(cfg=cfg)
+    mgr.on_session_start("SYS", "", "REQ")
+    for i in range(1, 6):
+        add_obs(mgr, f"o{i}", "k" * 300, step=i)
+        mgr.on_step_start(step=i, query="")
+    assert mgr.budget.used < 100000, "远未到硬限"
+    res = mgr.on_turn_end(step_count=5)
+    assert res.reason == "long_loop", \
+        f"步数超阈值但未达限 → 应为 long_loop，实际 {res.reason}"
+    # 反向：达限 → budget（由 test_budget_ratio_trigger 覆盖）
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

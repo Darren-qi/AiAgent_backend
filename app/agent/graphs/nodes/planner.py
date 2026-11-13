@@ -28,7 +28,12 @@ QUICK_TODOS_PROMPT = """你是一个任务规划专家。请将用户任务分�
    且该行末尾必须附加标记 ` [SIMPLE]`，不再输出其他待办。
 2. 复杂任务：只输出 2-5 个待办事项，不要太多；每行一个，格式: `- [ ] 事项描述`
 3. 事项描述要简洁，一行说完；不要详细展开每个步骤的实现细节
-4. 每个待办只负责 1-3 个文件的产出；要生成 4 个以上文件的任务必须拆成多个待办（如"搭建项目骨架"和"创建组件"分开写）
+4. 每个待办负责 1-3 个文件的产出；纯骨架/配置类互不依赖的新建文件可合并为一条待办批量产出（执行时一次并发建完）；有逻辑关联的 4 个以上文件仍拆多条待办（如"搭建项目骨架"和"创建组件"分开写）
+5. 待办必须指向用户要求的**最终状态**，不是过程动作：
+   只读的"扫描/梳理/分析/规划"不能作为唯一待办，必须与实际改动合并在同一条待办里
+   （如"扫描根目录并将文件移入对应子目录"）；
+   要求"只保留/全部移入/清理掉"这类状态型任务，最后一条必须是校验最终状态的待办
+6. 涉及移动、删除、整理多个文件或改变目录结构的任务，一律按复杂任务拆解，不得标 [SIMPLE]
 
 ## 示例
 输入: "为用户模块添加 JWT 认证功能"
@@ -94,8 +99,15 @@ title: {title}
 2. 考虑需要的资源和步骤
 3. 预判可能的困难
 4. 简明输出你的思考
-5. 待办涉及多个文件时逐轮推进：每轮优先落盘缺失清单中的下一个文件，禁止重复生成已存在的文件
-6. 同一文件已读取过就直接基于已知内容修改写入，不要重复读取
+5. 待办涉及多个文件时：**互不依赖的新建文件用一次 write 的 files 数组批量并发落盘**（`{{"operation":"write","files":[{{"path":"a.py","content":"..."}},{{"path":"b.py","content":"..."}}]}}`，一次写完缺失清单里的全部文件，子目录自动创建）；只有文件间存在依赖（需先读/先建才能写）或需逐个核对内容时才逐轮推进。禁止重复生成已存在的文件
+6. 改动已有文件前先在思考里做前置判断：这处改动是局部（增删改个别几处）还是重写级？局部 → 用 edit（old_text→new_text 只替换改动处，其余内容零风险）；重写级/大幅重构或新建文件 → 才用 write 全量覆盖（必须基于完整内容，长文件先读完所有分页再覆盖）。判断幅度由你根据需求权衡，把结论写进思考再动手
+7. 梳理/定位代码先用 search_files 关键词搜索（拿到 文件:行号），再用 read 的 offset/limit 精读命中点附近；禁止整读大文件、禁止反复 list 目录漫游
+8. 信息足够就立即推进产出；当历史上下文出现"最后一轮/强制交付"或观察提示该产出交付物时，本轮必须产出，不要再收集信息
+9. 移动/归类/整理/迁移类待办用 file_operations 的 operation=move，支持批量 files=[{{path,dest}}]（或 from/to、src/dst 键，一次搬多个；模板转义故写双括号）；单个用 path=源, dest=目标。**禁止在目标位置用 write 重新生成一份冒充移动**——移动完成后原位置必须不再有该文件。批量清理用 delete 的 files=[{{path}}] 或 paths=[...]（delete 也支持批量）。**归类时禁止在任务根新建 legacy/archive/old 等归档目录**——旧文件移进需求点名的子目录或直接删除，根目录不得因归类多出任何新条目
+10. 所有 path 参数必须与【任务目录现有文件】清单里的相对路径逐字一致：文件在子目录就必须带前缀（清单里是 app/extensions.py 就读 app/extensions.py，不许写裸的 extensions.py）；清单是本轮开始时的快照，移动/新建后会过期——对清单没有或没把握的路径，本轮先用 operation=list 看一次真实目录树再访问，禁止凭待办文字臆测目录（如想当然的 backend/）
+11. 观察结果是"工具执行失败"时：下一轮必须修正参数后**重试同一个动作**（缺参数就补参数、路径错就改正路径），最多连续重试 2 次；连续失败才允许换替代路径。禁止用连续的只读动作绕开失败——只读不产生进展，会耗尽轮次预算导致待办判失败
+12. 带结构要求的待办（如"只显示两个子目录""文件全部归类"）收尾前必须 operation=list 看一次真实根目录逐条核对，真实结构与要求一致才允许写完成结论；根目录条目**含隐藏文件**（.gitignore/.env.example 等）也算数——要求"根目录只剩两个子目录"时隐藏文件同样是残留，删除或移入子目录；禁止凭记忆里的计划宣布达成——移动类任务要确认原位置没有漏搬的残留文件
+13. write **新建**文件成功后不要读回确认——你刚生成的内容就在上下文里，直接看观察里的缺件清单推进下一批（缺什么写什么，写完看完成判定），"读一遍刚写的文件确认结构"是浪费轮次。只允许三种读：①写依赖方前读被依赖文件（如写 routes.py 前读 models.py 拿字段）②覆盖/重写已有文件前读全其内容 ③观察报该文件写入异常需排障
 
 请输出你的思考："""
 
@@ -129,12 +141,23 @@ code_generator 会自动写入文件，参数格式：
 参数: {"language": "python", "framework": "flask", "requirements": "创建 Flask 博客项目，包含 models.py, routes.py, templates/"}
 原因: 生成完整的 Flask 博客代码
 
+### 代码定位 → 使用 search_files（先搜后读）
+**在任务目录里找代码/文件时优先 search_files，不要靠 read 整读或 list 逐层翻：**
+参数: {"pattern": "delete|remove", "target": "content", "output_mode": "content"}
+- target=content 按正则搜内容（返回 文件:行号: 匹配行）；target=files 按文件名 glob 找文件
+- output_mode: content（明细）/ files_only（仅文件）/ count（每文件命中数，先探分布）
+- 拿到行号后用 file_operations read 精读：offset=行号-10, limit=80（content 带行号仅用于定位，写回文件时不要带行号）
+
 ### 简单文件操作 → 使用 file_operations
-**仅当读取、列出、删除文件时使用 file_operations！**
+**读取、列出、删除、移动/归类、局部修改已有文件时使用 file_operations！**
 参数必须是 JSON 格式：
-- `operation`: create/write/read/list/delete
+- `operation`: create/write/read/list/delete/edit/move
 - `path`: 文件路径（必须用 path！不是 filename）
 - `content`: 文件内容（write 时需要）
+- `files`: 批量写入数组（write 时可替代 path+content）：[{"path": "a.py", "content": "..."}, {"path": "b.py", "content": "..."}]——互不依赖的新建文件一次并发写完，骨架类禁止逐文件多轮
+- `dest`: move 的目标路径（move 时需要；移动类任务禁止用 write 在目标处重建副本）
+- `old_text`/`new_text`/`replace_all`: edit 局部替换（old_text 必须与文件逐字一致且唯一；命中多处才传 replace_all=true）
+- `offset`/`limit`: read 分页（默认读前 200 行；大文件按需指定 offset 续读）
 
 ### 示例
 
@@ -143,10 +166,25 @@ code_generator 会自动写入文件，参数格式：
 参数: {"operation": "write", "path": "requirements.txt", "content": "Flask>=3.0"}
 原因: 创建依赖文件
 
+**批量创建多个互不关联的文件（项目骨架，一次并发建完）：**
+动作: file_operations
+参数: {"operation": "write", "files": [{"path": "config.py", "content": "..."}, {"path": "app/__init__.py", "content": "..."}, {"path": "requirements.txt", "content": "Flask>=3.0"}]}
+原因: 三个文件互不依赖，批量并发落盘，避免逐文件多轮等待
+
 **读取文件：**
 动作: file_operations
 参数: {"operation": "read", "path": "app.py"}
 原因: 检查文件内容
+
+**局部修改已有文件（改动幅度判断为局部时优先）：**
+动作: file_operations
+参数: {"operation": "edit", "path": "app.py", "old_text": "要改的原文片段", "new_text": "替换后的新文本"}
+原因: 只替换这一处，文件其余部分不动
+
+**移动/归类文件（"统一放到xx目录"类任务专用）：**
+动作: file_operations
+参数: {"operation": "move", "path": "main.py", "dest": "backend/main.py"}
+原因: 把根目录 main.py 搬进 backend，移动后原位置不再保留
 
 ## 错误示例（绝对不要这样写）
 ❌ 用 file_operations 写复杂的代码文件（应该用 code_generator）
@@ -157,7 +195,8 @@ code_generator 会自动写入文件，参数格式：
 - 列出**本轮**动作会创建或修改的文件（相对任务目录的路径，含扩展名），逗号分隔，最多3个
 - 只列本待办标题范围内的产出；整个项目的文件清单分摊到各待办/各轮次，不要一次列全
 - 本待办不产出任何文件时写: 目标文件: 无
-- 新功能必须生成新文件；只有待办标题就是修改某个已有文件时才允许写它
+- 修改已有文件算目标文件（列出被改的文件）；改动是局部还是重写级由你在计划里判断：局部改用 edit、重写级才全量覆盖
+- 新功能必须生成新文件；只有待办标题就是修改某个已有文件时才允许改它
 
 请输出（四行，缺一不可）：
 动作: <action_name>
@@ -203,6 +242,11 @@ action: {action}
    **反例（禁止）**：文件已写完且正确，却因"没跑过 npm build/没看到 stdout"判未完成——会让任务无限循环。
    **正例**："5个文件齐全、代码正确，构建类任务无法在沙箱运行验证，判完成"；
    "Python 实际运行抛 NameError: x 未定义，判未完成"。
+6. **移动/归类/整理/迁移类待办**（按待办标题语义判断）：完成 = 目标位置已有该文件，
+   **且【任务目录现有文件】中原位置已不再有它**。只在目标位置新建了副本、
+   原文件仍留在原处 = 未完成，reason 点名仍留在原位置的文件。
+7. **状态必须与原因自洽**：本轮某个动作成功执行 ≠ 待办完成。判"已完成"前对照当前待办
+   标题的全部目标逐项核对；只要原因里写明还有任何未达成的内容，完成状态就不得标"已完成"。
 
 输出格式：
 完成状态: [已完成 / 部分完成 / 未完成]
@@ -739,6 +783,7 @@ title: {todo.get("title", "")}
 ✅ 正确: {{"operation": "write", "path": "app.py", "content": "from flask import Flask..."}}
 ✅ 正确: {{"operation": "write", "path": "routes/__init__.py", "content": ""}}
 ✅ 正确: {{"operation": "write", "path": "templates/index.html", "content": "<!DOCTYPE html>..."}}
+✅ 正确（互不依赖的多个文件批量并发建完，替代逐文件多轮）: {{"operation": "write", "files": [{{"path": "config.py", "content": "..."}}, {{"path": "app/__init__.py", "content": "..."}}]}}
 ❌ 错误: {{"operation": "write", "path": "@app.route('/')", "content": "..."}}
 ❌ 错误: {{"operation": "write", "path": "def index()", "content": "..."}}
 
@@ -1103,16 +1148,19 @@ title: {todo.get("title", "")}
             "files_mentioned": [],
         }
 
-        # 解析完成状态
-        if "已完成" in content:
-            result["completed"] = True
-            result["success"] = True
-        elif "部分完成" in content:
-            result["completed"] = True  # 部分完成也视为完成，避免过度严格
-            result["success"] = True
-        elif "未完成" in content:
+        # 解析完成状态（只认"完成状态:"所在行——原因文本里常出现"已完成/未完成"
+        # 字样，按全文子串判定会把"未完成 + 原因含已完成"误判成完成，生产实测假完成根因之一）
+        status_match = re.search(r'^完成状态[:：]\s*(.+)$', content, re.MULTILINE)
+        status_text = status_match.group(1) if status_match else content
+        if "未完成" in status_text:
             result["completed"] = False
             result["success"] = False
+        elif "部分完成" in status_text:
+            result["completed"] = True  # 部分完成也视为完成，避免过度严格
+            result["success"] = True
+        elif "已完成" in status_text:
+            result["completed"] = True
+            result["success"] = True
 
         # 解析原因
         reason_match = re.search(r'原因[:：]\s*(.+)', content)

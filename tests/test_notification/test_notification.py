@@ -33,6 +33,6 @@ class TestNotificationManager:
             task_name="test_task",
             status="completed",
             result="Task completed successfully",
-            channels=["email"]
+            notify_channels=["email"]   # 现参数名 2026-11-13 对齐
         )
         assert isinstance(results, dict)

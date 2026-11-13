@@ -33,8 +33,8 @@ hook3  execute() finally → on_turn_end() → 日志 saved/offloaded/folded →
 
 | Settings 字段 | 默认 | 对应策略 |
 |---|---|---|
-| `context_max_tokens` | 60000 | 上下文 token 预算（按主模型窗口配） |
-| `context_compress_trigger_ratio` | 0.7 | 超 70% 触发压缩 |
+| `context_max_tokens` | 128000 | 上下文 token 预算（2026-11-12 用户定 150K，同日修订对齐 deepseek-chat 窗口 128K：上限=触发点，杜绝 400） |
+| `context_compress_trigger_ratio` | 1.0 | 恰好用满 128K 才触发压缩 |
 | `context_compress_target_ratio` | 0.5 | 压回 50% |
 | `context_protect_recent_steps` | 2 | 最近 N step 的观察不淘汰 |
 | `context_turn_compress_min_steps` | 10 | turn 内 step 超此值 → 轨迹折叠 |

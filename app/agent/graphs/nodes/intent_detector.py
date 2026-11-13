@@ -158,9 +158,10 @@ class IntentDetector:
             if match:
                 json_str = match.group(1)
                 result = json.loads(json_str)
-            else:
-                logger.debug("意图数据解析失败，检查是否为标准JSON格式")
-
+                return self._normalize_intent_result(result)
+            # 无 ```json 围栏：原实现 result 未赋值就 return →
+            # UnboundLocalError 每次都掉进关键词兜底（2026-11-13 生产实锤）
+            result = json.loads(content)
             return self._normalize_intent_result(result)
         except json.JSONDecodeError:
             # 尝试从文本中提取 JSON

@@ -117,7 +117,11 @@ def test_manager_embeds_unloaded_items():
         seen.append(text)
         return [1.0, 0.0]
 
-    mgr = ContextManager(ContextConfig(max_tokens=3000), embed_fn=embed)
+    # 显式给 compress_trigger_ratio：本测的是"卸载后补算 embedding"，需要压缩真的发生。
+    # 2026-11-12 默认 trigger 改 1.0（超 128K 才压）后，未超限 turn_end 不再压缩，
+    # 故此处降 trigger 让预算压缩路径走到（与默认策略解耦）。
+    mgr = ContextManager(ContextConfig(max_tokens=3000, compress_trigger_ratio=0.7),
+                         embed_fn=embed)
     mgr.on_session_start("SYS", "", "REQ")
     for i in range(1, 6):
         mgr.on_observation(f"o{i}", "x" * 6000, step=i, tool="t",

@@ -199,6 +199,8 @@ class ContextManager:
         """
         self.current_step = step
         self.turn_steps = max(self.turn_steps, step)
+        # turn 内主动卸载（先卸后召回，防刚召回又被卸；召回 load 会续租）
+        self._proactive_prune(step)
         self._embed_unloaded()   # 召回前补算（知识项注册后首次可用）
         recall_res: Optional[RecallResult] = None
         if query and not build_only:
@@ -261,12 +263,23 @@ class ContextManager:
                        persisted: bool = False) -> BuildResult:
         """Observation 后钩子：登记、更新预算、判定 masking（只在 step 间）。"""
         step = self.current_step if step is None else step
+        # 大观察截断存档（2026-11-13 对齐 Hermes snapshot truncate-and-store）：
+        # 头部进上下文、全文存外部留指针，防单次大读取撑爆本步预算
+        _trunc_ref = ""
+        if len(content) > self.cfg.obs_full_chars:
+            _full = content
+            _trunc_ref = self.store.put(
+                _full, {"id": obs_id, "tool": tool, "truncated": True})
+            content = _full[: self.cfg.obs_full_chars] + (
+                f"\n...[内容已截断：原 {len(_full)} 字符，完整内容已存档 ref={_trunc_ref}；"
+                "需要时 load_by_ref 恢复或重新 read 对应分页]")
         item = ContextItem(
             id=obs_id, type=ItemType.OBSERVATION, content=content,
             token_count=count_tokens(content),
             attention=AttentionPosition.MIDDLE, created_step=step,
             last_access_step=step, recoverable=True, persisted=persisted,
             state=LoadState.LOADED,
+            external_ref=_trunc_ref or None,
             depends_on_steps=[depends_on_action_step]
             if depends_on_action_step is not None else [],
             metadata={"tool": tool, "params_summary": params_summary,
@@ -446,6 +459,71 @@ class ContextManager:
         return (f"[压缩摘要] tool={md.get('tool', '?')} "
                 f"params={md.get('params_summary', '')} "
                 f"tokens={it.token_count} 结果: {md.get('one_line', '')[:200]}")
+
+    def _proactive_prune(self, current_step: int) -> int:
+        """turn 内主动卸载（2026-11-13，对齐 Hermes _prune_old_tool_results）。
+
+        ① 去重：同一 tool+params 重复产生的 Observation 只保留最新一条全文，
+           旧的降级为一行摘要（Hermes：同文件读 5 次只留最新全文）；
+        ② 过期：超过 protect_recent_steps 未被访问的 Observation 降级为一行摘要
+           （原文已存外部可恢复）；已是摘要的再降级出上下文（INDEX_ONLY）。
+        租约按 max(created_step, last_access_step) 计——召回(load)会续租。
+        无 LLM、确定性；与压缩触发无关，不计入压缩次数。返回处理条数。
+        """
+        n = 0
+        # ① 去重（同 tool+params，只留最新）
+        groups: Dict[tuple, List[ContextItem]] = {}
+        for it in self.items.values():
+            if (it.type != ItemType.OBSERVATION or it.state != LoadState.LOADED
+                    or it.is_protected):
+                continue
+            _tool = (it.metadata or {}).get("tool") or ""
+            _ps = (it.metadata or {}).get("params_summary") or ""
+            if not _tool and not _ps:
+                continue
+            groups.setdefault((_tool, _ps), []).append(it)
+        for lst in groups.values():
+            if len(lst) < 2:
+                continue
+            lst.sort(key=lambda x: x.created_step, reverse=True)
+            for older in lst[1:]:
+                n += self._unload_obs(older, "重复观察去重（保留最新全文）")
+        # ② 过期（租约超龄）
+        for it in self.items.values():
+            if (it.type != ItemType.OBSERVATION or it.state != LoadState.LOADED
+                    or it.is_protected):
+                continue
+            lease = max(it.created_step, it.last_access_step or 0)
+            if current_step - lease > self.cfg.protect_recent_steps:
+                n += self._unload_obs(it, "过期观察卸载（原文存外部可恢复）")
+        if n:
+            self._recalc_budget()
+        return n
+
+    def _unload_obs(self, it: ContextItem, why: str) -> bool:
+        """观察降级：原文 → 一行摘要 →（已是摘要时）出上下文。降级前原文必存外部。"""
+        if it.state != LoadState.LOADED or it.is_protected:
+            return False
+        if not it.external_ref and it.content:
+            it.external_ref = self.store.put(it.content, {"id": it.id})
+            it.recoverable = True
+        before = it.effective_tokens()
+        if not it.masked:
+            summary = self._summarize_item(it)
+            it.content = summary
+            it.masked = True
+            it.mask_reason = f"proactive_unload:{why}"
+            it.token_count = count_tokens(summary)
+            action = ACT_COMPRESS
+        else:
+            it.content = ""
+            it.state = LoadState.INDEX_ONLY
+            it.masked = False
+            action = ACT_EVICT
+        self.budget.used = max(
+            0, self.budget.used - (before - it.effective_tokens()))
+        self._decisions.append(Decision(it.id, action, f"主动卸载：{why}"))
+        return True
 
     def _fold_trajectory(self) -> str:
         """长循环收尾：任务状态+关键发现+未完成项+外部引用 的结构化摘要。"""

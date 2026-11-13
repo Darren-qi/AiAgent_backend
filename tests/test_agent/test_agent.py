@@ -103,18 +103,21 @@ class TestInputGuard:
         assert "过长" in error
 
     def test_sql_injection(self):
-        """测试 SQL 注入检测"""
+        """测试 SQL 注入检测（2026-11-10 起 check 不再拦截 SQL 文本——任务含
+        CREATE/UPDATE 等词被误杀是线上报错根因；注入模式保留在检测器里可单测）"""
         guard = InputGuard()
         sql = "SELECT * FROM users WHERE id=1"
         is_safe, error = guard.check(sql)
-        assert is_safe is False
+        assert is_safe is True
+        assert guard._check_sql_injection(sql) is True
 
     def test_xss_attack(self):
-        """测试 XSS 攻击检测"""
+        """测试 XSS 攻击检测（同上：check 交给前端转义，检测器保留可单测）"""
         guard = InputGuard()
         xss = "<script>alert('xss')</script>"
         is_safe, error = guard.check(xss)
-        assert is_safe is False
+        assert is_safe is True
+        assert guard._check_xss(xss) is True
 
     def test_sanitize(self):
         """测试内容清理"""
