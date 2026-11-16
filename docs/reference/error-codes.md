@@ -135,3 +135,31 @@ FastAPI 默认形态 `{"detail": "..."}`，主要来自 endpoints 层 ~20 处直
 3. `app/api/` 抛出点用该子类，不裸写 HTTPException；
 4. 若前端需要分支处理，同步前端 `src/types/` 的错误码常量；
 5. 补/改测试（黄金集铁律：先红后绿）。
+
+## 7. 工具层错误码（SkillResult.error_code，2026-11-16 阶段一）
+
+Agent 循环内工具层的结构化错误协议，与 §2 AppException 体系**并行不交叉**：
+AppException 管 HTTP 响应，本节管循环内 correction 分支（不走 HTTP 状态码）。
+
+- 定义：`app/agent/skills/core/base_skill.py`（`TOOL_ERROR_CODES` + `SkillResult.error_code`）
+- 分类器：`progressive_loader.classify_params_problem`（结构问题）、`classify_tool_error`（文案改写）
+- 透传链：loader/执行层 → `execution_result["error_code"]` → main_graph `last_error_code`
+  → planner `_build_correction_hints` 按 code 给修正策略（字符串匹配兼容期兜底）
+- 拦截链（快改1）：planner `params_invalid` → `main_graph.build_plan_interception`
+  → 不进执行直接走 correction
+
+| error_code | 触发 | 产出点 |
+|---|---|---|
+| `MISSING_PARAM` | 缺必填/目标参数（含"缺少…参数"文案统一改写） | loader 契约拦截、skill 缺参报错 |
+| `INVALID_TYPE` | params 非 JSON 对象 | `validate_params_structure` |
+| `UNKNOWN_KEY` | 未知参数键（一期预留，未启用拒绝） | 阶段三 RunGuard |
+| `TRUNCATED_JSON` | 输出截断致 JSON 残缺 | 预留（阶段三识别） |
+| `UNKNOWN_SKILL` | 技能未注册 | loader `_load_module` 失败 |
+| `PATH_ESCAPE` | 路径逃逸出任务目录 | 预留（阶段三收口 safe_path） |
+| `TIMEOUT` | 步骤执行超时 | `main_graph._execute_with_timeout` |
+| `EXEC_FAILED` | 执行期异常 | loader/main_graph 兜底 exception |
+| `CONSECUTIVE_FAILURE` | 工具级连续失败熔断（≥`tool_consecutive_fail_limit` 拒下一次） | `guard.ToolGuard.begin`（阶段三） |
+| `RISK_DENIED` | 风险门拒绝（`tool_approval_mode=deny` 且 risk∈write/exec/network） | `guard.ToolGuard.begin`（阶段三） |
+
+**本节专用检查单**：新增 code → `TOOL_ERROR_CODES` + 上表 + `planner._build_correction_hints`
+分支（如需专属修正策略）+ 测试断言。前端无需同步（增量字段，`error` 文案不变）。

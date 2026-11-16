@@ -7,6 +7,13 @@ tags:
   - notification
   - email
   - message
+risk: network
+timeout: 60
+retry: 0
+stage: execute
+operation_targets:
+  "*": [content]
+usage: "必填 content（通知正文）；channel 默认 email，recipient 按渠道填写（email→邮箱，feishu/wecom/dingtalk→对应 ID）。缺 content 被拦时补正文重发。"
 parameters:
   type: object
   properties:

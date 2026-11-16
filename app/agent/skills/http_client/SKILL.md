@@ -7,6 +7,14 @@ tags:
   - http
   - network
   - api
+risk: network
+url_arg: url
+timeout: 120
+retry: 0
+stage: both
+operation_targets:
+  "*": [url]
+usage: "必填 url（含 http/https 完整地址）；method 默认 GET。params 只放 url/method/headers/timeout 等已声明键。缺 url 被拦时补完整 URL 重发。"
 parameters:
   type: object
   properties:

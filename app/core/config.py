@@ -171,6 +171,18 @@ class Settings(BaseSettings):
         )
 
     # =========================================
+    # 工具层 Harness 守卫（阶段三 RunGuard，2026-11-17）
+    # =========================================
+    tool_approval_mode: str = Field(
+        default="auto",
+        description="工具审批门：auto=放行（一期默认，留钩）；deny=拒绝 write/exec/network 风险技能"
+    )
+    tool_consecutive_fail_limit: int = Field(
+        default=2,
+        description="工具级连续失败熔断阈值：连续失败 N 次后第 N+1 次调用被拒（与调用级同 call_key≥3 并存）"
+    )
+
+    # =========================================
     # 配置验证
     # =========================================
     @field_validator("environment")
@@ -180,6 +192,15 @@ class Settings(BaseSettings):
         allowed = {"development", "production", "staging", "test"}
         if v not in allowed:
             raise ValueError(f"environment 必须是 {allowed} 之一")
+        return v
+
+    @field_validator("tool_approval_mode")
+    @classmethod
+    def validate_tool_approval_mode(cls, v: str) -> str:
+        """验证工具审批门模式"""
+        allowed = {"auto", "deny"}
+        if v not in allowed:
+            raise ValueError(f"tool_approval_mode 必须是 {allowed} 之一")
         return v
 
     @field_validator("log_level")

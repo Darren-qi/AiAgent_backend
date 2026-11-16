@@ -8,6 +8,21 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# 工具层结构化错误码（阶段一 2026-11-16，登记见 docs/reference/error-codes.md §7）。
+# 机器可读协议：correction 按 code 分支给修正策略，字符串文案匹配降为兜底。
+TOOL_ERROR_CODES = (
+    "MISSING_PARAM",      # 缺必填/目标参数
+    "INVALID_TYPE",       # params 非对象 / 类型不符
+    "UNKNOWN_KEY",        # 未知参数键（一期仅告警，未启用拒绝）
+    "TRUNCATED_JSON",     # 输出截断导致 JSON 残缺
+    "UNKNOWN_SKILL",      # 未注册技能
+    "PATH_ESCAPE",        # 路径/URL 逃逸出安全范围
+    "TIMEOUT",            # 执行超时
+    "EXEC_FAILED",        # 执行期异常
+    "CONSECUTIVE_FAILURE",  # 工具级连续失败熔断（阶段三）
+    "RISK_DENIED",        # 风险门拒绝（APPROVAL_MODE=deny，阶段三）
+)
+
 
 @dataclass
 class SkillResult:
@@ -16,6 +31,8 @@ class SkillResult:
     data: Any = None
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # 结构化错误码（TOOL_ERROR_CODES 之一；None=未分类）。放末尾保持位置参数兼容
+    error_code: Optional[str] = None
 
 
 class BaseSkill(ABC):

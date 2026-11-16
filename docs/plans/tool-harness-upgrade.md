@@ -219,3 +219,6 @@ model/latency）；`tests/test_llm/` 增打点断言。
 |---|---|---|
 | 2026-11-16 | 计划定稿 | 待执行 |
 | 2026-11-16 | 三个先行快改点二次确认 | 逐条 grep 复核全部属实，登记 §0.5，建议快改 1+2 合并为"传参错误速效包"先行落地 |
+| 2026-11-17 | 阶段一（含快改1） | ✅ 完成：`build_plan_interception` 拦截坏计划不进执行；`SkillResult.error_code` 8 码协议 + loader 分类改写；correction 按 code 分支（`_build_correction_hints`）+ 字符串兜底；error-codes.md §7；TESTCASES TC-S7-06~08 |
+| 2026-11-17 | 阶段二（含快改2） | ✅ 完成：9/9 SKILL.md 补 risk/path_arg/url_arg/timeout/retry/stage/operation_targets/usage；`*` 通配契约 + validate 接线；非法枚举 raise、缺失 warning；get_by_stage/get_by_risk/get_guard_meta；TESTCASES TC-S14-04~06。附带修复：general_response 降级参数 message→input（原必失败）；prompt 引用 frontmatter 试点归阶段四 |
+| 2026-11-17 | 阶段三 | ✅ 完成：新建 `app/agent/skills/guard.py`（ToolGuard 五道关卡：白名单→契约/类型→safe_path·safe_url→连续失败熔断→风险门），挂载 loader.execute 替换原 L5 闸门（不通过不进 skill 语义不变），超时在 `_execute_with_timeout` 补 finish(TIMEOUT)；Settings 增 `tool_approval_mode`/`tool_consecutive_fail_limit`；error_code 增 CONSECUTIVE_FAILURE/RISK_DENIED；TESTCASES TC-S8-07~08。保守策略：未知键一期仅告警、类型检查只拦结构性错误（联合类型已支持） |

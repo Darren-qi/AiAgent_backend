@@ -7,6 +7,13 @@ tags:
   - sandbox
   - exec
   - test
+risk: exec
+timeout: 60
+retry: 0
+stage: execute
+operation_targets:
+  "*": [code, file]
+usage: "code 与 file 二选一（file 为任务目录内相对路径）；timeout 默认 30 秒、最大 60。二者都缺被拦时补其一重发。"
 parameters:
   type: object
   properties:

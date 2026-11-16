@@ -576,7 +576,7 @@ class Planner:
             "id": 1,
             "title": f"执行任务: {task[:50]}",
             "action": "general_response",
-            "params": {"message": task},
+            "params": {"input": task},
             "status": "pending"
         }]
 
@@ -655,12 +655,13 @@ class Planner:
             content = response.content.strip()
             plan_result = self._parse_planning_response(content, todo)
 
-            # 验证并补充必要参数
+            # 验证并补充必要参数；补后重算 params_invalid（补默认键可能改变结构）
             plan_result["params"] = self._ensure_required_params(
                 plan_result["action"],
                 plan_result["params"],
                 todo
             )
+            self._refresh_params_invalid(plan_result)
 
             return plan_result
 
@@ -668,7 +669,7 @@ class Planner:
             logger.warning(f"[Planner] Planning 阶段失败: {e}")
             return {
                 "action": "general_response",
-                "params": {"message": f"执行待办: {todo.get('title', '')}"},
+                "params": {"input": f"执行待办: {todo.get('title', '')}"},
                 "reason": f"降级执行（LLM 调用失败: {e}）"
             }
 
@@ -710,6 +711,7 @@ class Planner:
         last_error: str = None,
         last_result: str = None,
         last_action: str = None,
+        last_error_code: str = None,
     ) -> Dict[str, Any]:
         """
         Planning 阶段：生成执行动作（带错误反馈）
@@ -723,6 +725,7 @@ class Planner:
             last_error: 上一步的错误信息
             last_result: 上一步的执行结果
             last_action: 上一步选中的技能名（JIT：出错才注入其全量 schema）
+            last_error_code: 上一步结构化错误码（TOOL_ERROR_CODES，优先按 code 分支）
 
         Returns:
             动作配置 {action, params, reason}
@@ -732,34 +735,24 @@ class Planner:
         # 如果有错误，在 prompt 中添加错误反馈
         feedback_section = ""
         if last_error:
-            # 分析错误类型，提供更具体的修正建议
-            correction_hints = ""
-            if "文件不存在" in last_error:
-                correction_hints = """
-**错误分析**: 文件不存在，说明需要先创建文件。
-**修正策略**: 使用 file_operations 的 operation='write' 创建文件（会自动创建父目录），然后再读取或编辑。
-"""
-            elif "缺少 path 参数" in last_error:
-                correction_hints = """
-**错误分析**: 缺少必要的 path 参数。
-**修正策略**: 必须在 params 中明确指定 path 参数，例如: {"path": "app.py", "content": "..."}
-"""
-            elif "缺少" in last_error and "参数" in last_error:
-                correction_hints = """
-**错误分析**: 缺少必要参数。
-**修正策略**: 检查 Skill 的参数要求，确保所有必需参数都已提供。
-"""
-
+            correction_hints = self._build_correction_hints(
+                last_error, last_error_code)
+            # 缺参类错误（按 code 或文案判定）→ JIT 注入全量 schema+调用须知
+            _need_schema = (
+                last_error_code == "MISSING_PARAM"
+                or ("缺少" in last_error and "参数" in last_error)
+            )
+            _code_line = (
+                f"错误代码: {last_error_code}\n" if last_error_code else "")
             feedback_section = f"""
 ## 上一步执行失败
-错误信息: {last_error}
+{_code_line}错误信息: {last_error}
 执行结果: {last_result}
 {correction_hints}
 请分析失败原因，并给出修正后的动作和参数。
 
 **重要**: 必须修正上一步缺失的参数，特别是 `path` 参数必须明确指定值。
-""" + (self._skill_schema_hint(last_action)
-        if last_error and "缺少" in last_error and "参数" in last_error else "")
+""" + (self._skill_schema_hint(last_action) if _need_schema else "")
 
         prompt = f"""基于你的思考，制定具体的执行动作。
 
@@ -819,12 +812,13 @@ title: {todo.get("title", "")}
             content = response.content.strip()
             plan_result = self._parse_planning_response(content, todo)
 
-            # 验证并补充必要参数
+            # 验证并补充必要参数；补后重算 params_invalid（补默认键可能改变结构）
             plan_result["params"] = self._ensure_required_params(
                 plan_result["action"],
                 plan_result["params"],
                 todo
             )
+            self._refresh_params_invalid(plan_result)
 
             return plan_result
 
@@ -834,9 +828,99 @@ title: {todo.get("title", "")}
             logger.warning(f"[Planner] Planning 阶段失败: {e}")
             return {
                 "action": "general_response",
-                "params": {"message": f"执行待办: {todo.get('title', '')}"},
+                "params": {"input": f"执行待办: {todo.get('title', '')}"},
                 "reason": f"降级执行（LLM 调用失败: {e}）"
             }
+
+    def _refresh_params_invalid(self, plan_result: Dict[str, Any]) -> None:
+        """_ensure_required_params 之后重算 params_invalid 标记。
+
+        补默认键可能修复/恶化结构，以最终 params 为准（阶段一：
+        该标记将被 main_graph 消费——为真时不进执行直接走 correction）。
+        """
+        _prob = validate_params_structure(
+            plan_result.get("action"), plan_result.get("params"))
+        if _prob:
+            plan_result["params_invalid"] = True
+            plan_result["params_invalid_reason"] = _prob
+        else:
+            plan_result.pop("params_invalid", None)
+            plan_result.pop("params_invalid_reason", None)
+
+    def _build_correction_hints(
+        self,
+        last_error: str,
+        last_error_code: str = None,
+    ) -> str:
+        """按 error_code 优先给修正策略（阶段一协议），字符串匹配兜底。
+
+        code 分支是稳定契约（不依赖文案）；字符串分支兼容期保留，
+        覆盖未分类错误（如"文件不存在"）的更具体策略。
+        """
+        code_hints = {
+            "MISSING_PARAM": """
+**错误分析**: 缺少必要参数（error_code=MISSING_PARAM）。
+**修正策略**: 对照该 Skill 的参数要求补齐所有必填参数；file_operations 必须明确 path（或批量 files[]/edits[]）。
+""",
+            "INVALID_TYPE": """
+**错误分析**: 参数结构类型错误（error_code=INVALID_TYPE），params 必须是 JSON 对象。
+**修正策略**: 重新输出规范 JSON：参数行只放 {"key": "value"} 对象，不要混入代码或说明文字。
+""",
+            "UNKNOWN_KEY": """
+**错误分析**: 参数含未知键（error_code=UNKNOWN_KEY）。
+**修正策略**: 只保留 Skill 参数表中列出的键，删除多余键后重发。
+""",
+            "TRUNCATED_JSON": """
+**错误分析**: 输出被截断导致 JSON 残缺（error_code=TRUNCATED_JSON）。
+**修正策略**: 缩小单次参数体积（批量 ≤4 文件、总内容 ≤6000 字），超出拆成多次调用。
+""",
+            "PATH_ESCAPE": """
+**错误分析**: 路径逃逸出任务目录（error_code=PATH_ESCAPE）。
+**修正策略**: path 只写任务目录内的相对路径（如 src/App.vue），禁止绝对路径或 ../ 上跳。
+""",
+            "TIMEOUT": """
+**错误分析**: 上一步执行超时（error_code=TIMEOUT）。
+**修正策略**: 缩小操作范围或拆分为更小步骤重试；避免单次处理过大文件/过多文件。
+""",
+            "UNKNOWN_SKILL": """
+**错误分析**: 技能未注册（error_code=UNKNOWN_SKILL）。
+**修正策略**: 只能使用"可用工具"列表中的动作名，改选有效技能。
+""",
+            "CONSECUTIVE_FAILURE": """
+**错误分析**: 工具连续失败已被熔断（error_code=CONSECUTIVE_FAILURE）。
+**修正策略**: 不要原样重试——换一种达成方式（不同工具/不同参数形态）；
+仍无法推进时向用户报告障碍并说明已尝试的方案。
+""",
+            "RISK_DENIED": """
+**错误分析**: 当前审批模式禁止该风险级工具（error_code=RISK_DENIED）。
+**修正策略**: 换用只读/低风险方式完成；确需写/执行/联网时向用户说明并请求授权。
+""",
+        }
+        if last_error_code in code_hints:
+            return code_hints[last_error_code]
+
+        # 字符串兜底（兼容期保留；优先于通用 EXEC_FAILED 分支）
+        if "文件不存在" in last_error:
+            return """
+**错误分析**: 文件不存在，说明需要先创建文件。
+**修正策略**: 使用 file_operations 的 operation='write' 创建文件（会自动创建父目录），然后再读取或编辑。
+"""
+        if "缺少 path 参数" in last_error:
+            return """
+**错误分析**: 缺少必要的 path 参数。
+**修正策略**: 必须在 params 中明确指定 path 参数，例如: {"path": "app.py", "content": "..."}
+"""
+        if "缺少" in last_error and "参数" in last_error:
+            return """
+**错误分析**: 缺少必要参数。
+**修正策略**: 检查 Skill 的参数要求，确保所有必需参数都已提供。
+"""
+        if last_error_code == "EXEC_FAILED":
+            return """
+**错误分析**: 上一步执行异常（error_code=EXEC_FAILED）。
+**修正策略**: 分析错误信息调整参数或更换技能重试；连续失败请换一种达成方式。
+"""
+        return ""
 
     def _ensure_required_params(
         self,
@@ -867,6 +951,12 @@ title: {todo.get("title", "")}
         elif action == "code_generator":
             if "requirements" not in params and "language" not in params:
                 params["requirements"] = todo.get("title", "生成代码")
+
+        elif action == "general_response":
+            # 兼容历史 message 别名：技能只认 input，缺了必报"缺少 input 参数"
+            # （降级路径与模型惯用 message 键），有 message 时桥接过去
+            if "input" not in params and params.get("message"):
+                params["input"] = params["message"]
 
         return params
 

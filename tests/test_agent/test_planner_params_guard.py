@@ -111,3 +111,69 @@ def test_schema_hint_carries_batch_params_and_usage():
     assert "files" in h and "edits" in h, "出错 JIT 的 schema 必须含批量参数"
     assert "调用须知" in h, "出错 JIT 必须附带调用须知（渐进第三级）"
     assert "≤4文件" in h
+
+
+# ===== 阶段一 · 错误协议 + 拦截前移（2026-11-16） =====
+
+def test_params_invalid_intercepted_with_error_code():
+    """快改1：params_invalid 坏计划被 main_graph 拦截不进执行，带结构化 code。"""
+    from app.agent.graphs.main_graph import build_plan_interception
+
+    bad = Planner()._parse_planning_response(
+        GARBLED_CONTENT, {"id": 1, "title": "搭前端骨架"})
+    hit = build_plan_interception(bad)
+    assert hit is not None, "params_invalid 计划必须被拦截（不进执行）"
+    assert hit["error_code"] == "MISSING_PARAM"
+    assert "未执行" in hit["error"]
+    assert "缺少目标参数" in hit["error"]  # 原因透传给下一轮 correction
+
+    good = Planner()._parse_planning_response(GOOD_CONTENT, {"id": 1})
+    assert build_plan_interception(good) is None, "正常计划不得被误拦"
+
+    non_dict = {"params_invalid": True,
+                "params_invalid_reason": "params 不是 JSON 对象（收到 str）"}
+    assert build_plan_interception(non_dict)["error_code"] == "INVALID_TYPE"
+
+
+async def test_error_code_protocol_on_loader_rejections():
+    """阶段一：SkillResult.error_code 协议——拦截/未注册技能返回稳定 code。"""
+    from app.agent.skills.core.progressive_loader import get_loader
+
+    r = await get_loader().execute(
+        "file_operations",
+        {"operation": "write", "name": "'register'", "component": "() => import(..)"},
+    )
+    assert r.success is False
+    assert r.error_code == "MISSING_PARAM", f"拦截应带 code: {r.error_code}"
+
+    r2 = await get_loader().execute("no_such_skill_xyz", {"foo": 1})
+    assert r2.success is False
+    assert r2.error_code == "UNKNOWN_SKILL"
+
+    # 缺参文案统一改写（skill 内手工 if 报错 → loader 出口分类）
+    from app.agent.skills.core.progressive_loader import classify_tool_error
+    assert classify_tool_error("缺少 path 参数") == "MISSING_PARAM"
+    assert classify_tool_error("文件不存在: a.py") is None  # 未分类保持 None 走字符串兜底
+
+
+def test_correction_hints_branch_by_code():
+    """阶段一：correction 优先按 error_code 分支，不依赖文案；字符串兜底保留。"""
+    p = Planner()
+
+    # code 分支：文案完全不匹配也按 code 给策略
+    h = p._build_correction_hints("某种无法识别的失败描述", "MISSING_PARAM")
+    assert "MISSING_PARAM" in h and "补齐" in h
+
+    # code 优先于字符串（文件不存在文案 + MISSING_PARAM code → 走 code 分支）
+    h2 = p._build_correction_hints("文件不存在: a.py", "MISSING_PARAM")
+    assert "MISSING_PARAM" in h2 and "先创建文件" not in h2
+
+    # 字符串兜底保留（无 code 时旧行为不回归）
+    h3 = p._build_correction_hints("文件不存在: a.py", None)
+    assert "先创建文件" in h3
+    h4 = p._build_correction_hints("缺少 path 参数", None)
+    assert "path" in h4
+
+    # EXEC_FAILED 仅作最后兜底（字符串无匹配时）
+    h5 = p._build_correction_hints("connection reset by peer", "EXEC_FAILED")
+    assert "EXEC_FAILED" in h5

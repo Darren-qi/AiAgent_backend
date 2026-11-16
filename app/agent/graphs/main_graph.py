@@ -30,6 +30,24 @@ from app.models.execution_node import ExecutionNode
 logger = logging.getLogger(__name__)
 
 
+def build_plan_interception(plan_result: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """坏计划拦截判定（阶段一 · 快改1，2026-11-16）。
+
+    planner 解析层已标记 params_invalid 的计划不进执行——返回结构化
+    last_error（含 error_code）由调用方走 correction，省一次必败的
+    执行往返；正常计划返回 None。纯函数，供单测直接断言。
+    """
+    if not plan_result or not plan_result.get("params_invalid"):
+        return None
+    reason = str(plan_result.get("params_invalid_reason") or "参数结构异常")
+    from app.agent.skills.core.progressive_loader import classify_params_problem
+    code = classify_params_problem(reason)
+    return {
+        "error": f"计划参数无效（未执行，error_code={code}）: {reason}",
+        "error_code": code,
+    }
+
+
 def _walk_dir(base: Path, current: Path) -> List[Dict[str, Any]]:
     """按 {name, path, type, children} 递归列出任务目录（与前端文件树格式一致）。
 
@@ -1308,6 +1326,7 @@ class AgentGraph:
 
         max_loop_iterations = 5
         last_error = None
+        last_error_code = None  # 结构化错误码（TOOL_ERROR_CODES），correction 按 code 分支
         last_execution_result = None
         # 追踪工具调用历史，防止相同调用重复3次以上
         tool_call_history = []
@@ -1481,6 +1500,7 @@ class AgentGraph:
                 last_error=last_error,
                 last_result=last_execution_result,
                 last_action=_prev_action,
+                last_error_code=last_error_code,
             )
 
             # 检查取消（LLM 调用后）
@@ -1538,6 +1558,23 @@ class AgentGraph:
                 meta_data={"reason": reason, "loop_index": loop_idx}
             )
 
+            # === 坏计划拦截前移（阶段一，快改1）：params_invalid 为真不进执行，
+            # 直接生成结构化 last_error 走 correction——省一次必败的执行往返
+            _intercept = build_plan_interception(plan_result)
+            if _intercept:
+                last_error = _intercept["error"]
+                last_error_code = _intercept["error_code"]
+                last_execution_result = "（计划参数无效，本轮未执行）"
+                logger.warning(
+                    "[AgentGraph] 拦截坏计划 todo=%s code=%s: %s",
+                    todo_id, last_error_code, last_error)
+                if on_step:
+                    on_step("error", {
+                        "content": last_error, "todo_id": todo_id,
+                        "error_code": last_error_code,
+                    })
+                continue
+
             # === 检查是否重复调用 ===
             call_key = f"{action}:{json.dumps(params, sort_keys=True, default=str)}"
             call_count = sum(1 for c in tool_call_history if c == call_key)
@@ -1576,6 +1613,10 @@ class AgentGraph:
             last_execution_result = str(execution_result.get("data", ""))[:200]
             last_error = execution_result.get("error") or (
                 None if execution_result.get("success", False) else "执行失败"
+            )
+            # 结构化错误码随错误透传（阶段一）；成功时清空防串轮
+            last_error_code = (
+                execution_result.get("error_code") if last_error else None
             )
 
             # ContextManager Observation 后钩子：登记观察 → 更新预算 →
@@ -2136,9 +2177,18 @@ class AgentGraph:
                 timeout=timeout
             )
         except asyncio.TimeoutError:
+            # 阶段三：超时计入 guard 熔断计数（内层被 cancel 不 finish，此处补）
+            try:
+                from app.agent.skills.guard import tool_guard
+                tool_guard.finish(
+                    step.get("action") or "", ok=False,
+                    detail=f"timeout {timeout}s", error_code="TIMEOUT")
+            except Exception as _ge:  # noqa: BLE001 - 守卫回执失败不阻塞
+                logger.warning("[AgentGraph] guard.finish 超时回执失败: %s", _ge)
             return {
                 "success": False,
                 "error": f"步骤执行超时: {timeout}秒",
+                "error_code": "TIMEOUT",
                 "action": step.get("action"),
                 "step": step.get("step"),
             }
@@ -2242,6 +2292,8 @@ class AgentGraph:
                 "success": result.success,
                 "data": result.data,
                 "error": result.error,
+                # getattr 防御：测试 spy/旧 registry 返回对象可能无该字段
+                "error_code": getattr(result, "error_code", None),
                 "action": friendly_action or action,
             }
         except Exception as e:
@@ -2259,6 +2311,7 @@ class AgentGraph:
                         "success": result.success,
                         "data": result.data,
                         "error": result.error,
+                        "error_code": getattr(result, "error_code", None),
                         "action": friendly_action or action,
                     }
             except:
@@ -2269,6 +2322,7 @@ class AgentGraph:
             return {
                 "success": False,
                 "error": str(e),
+                "error_code": "EXEC_FAILED",
                 "action": action,
             }
 

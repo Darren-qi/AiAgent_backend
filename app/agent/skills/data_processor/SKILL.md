@@ -7,6 +7,17 @@ tags:
   - data
   - processing
   - transform
+risk: read
+timeout: 30
+retry: 0
+stage: both
+operation_targets:
+  parse_json: [input_data]
+  filter: [input_data]
+  sort: [input_data]
+  aggregate: [input_data]
+  transform: [input_data]
+usage: "operation 必填（parse_json/filter/sort/aggregate/transform），input_data 必填（JSON 字符串或对象）；options 可选。缺 input_data 被拦时补数据重发。"
 parameters:
   type: object
   properties:
@@ -16,7 +27,7 @@ parameters:
       required: true
       enum: [parse_json, filter, sort, aggregate, transform]
     input_data:
-      type: string
+      type: [string, object, array]
       description: "输入数据（JSON 字符串或对象）"
       required: true
     options:

@@ -7,6 +7,13 @@ tags:
   - search
   - information
   - knowledge
+risk: network
+timeout: 30
+retry: 1
+stage: both
+operation_targets:
+  "*": [query]
+usage: "必填 query（关键词/问题）；engine 默认 default，limit 默认 5。缺 query 被拦时补关键词重发。"
 parameters:
   type: object
   properties:

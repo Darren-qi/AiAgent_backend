@@ -7,6 +7,13 @@ tags:
   - chat
   - response
   - conversation
+risk: read
+timeout: 60
+retry: 0
+stage: both
+operation_targets:
+  "*": [input]
+usage: "必填 input（用户输入/问题正文）；context 可选。参数键必须是 input/context，不要用 message 等别名。"
 parameters:
   type: object
   properties:

@@ -7,6 +7,14 @@ tags:
   - code
   - generator
   - programming
+risk: write
+path_arg: task_path
+timeout: 120
+retry: 0
+stage: both
+operation_targets:
+  "*": [requirements]
+usage: "必填 requirements（需求描述）；language/framework 可选。带 task_path 时产物写入任务目录。缺 requirements 被拦时补需求描述重发。"
 parameters:
   type: object
   properties:

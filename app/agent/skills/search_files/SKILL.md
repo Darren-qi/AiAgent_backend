@@ -7,6 +7,14 @@ tags:
   - search
   - code
   - files
+risk: read
+path_arg: path
+timeout: 30
+retry: 1
+stage: both
+operation_targets:
+  "*": [pattern]
+usage: "必填 pattern（content 模式为正则，files 模式为文件名 glob）；target 默认 content，path 默认任务目录根。缺 pattern 被拦时补检索式重发。"
 parameters:
   type: object
   properties:

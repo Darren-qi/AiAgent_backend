@@ -7,6 +7,11 @@ tags:
   - file
   - io
   - project-init
+risk: write
+path_arg: path
+timeout: 60
+retry: 0
+stage: both
 parameters:
   type: object
   properties:

@@ -94,6 +94,9 @@
 | TC-S7-03 | 🟡 手动：真实任务里某步失败后，下一轮思考必须引用错误并重试原动作（不许只读绕圈烧轮次） | 生产节点日志核对（2026-11-13 案例：N3015失败→N3017分析→重试） | 🟡 |
 | TC-S7-04 | 批量写参数被输出上限截断降级 raw → 抢救 files[] 完整元素照常落盘，截断元素丢弃 | test_file_operations::test_execute_recovers_truncated_raw | ✅ |
 | TC-S7-05 | 规则13：新建文件写完不读回确认（只许依赖读/覆盖前读/排障读），减少无谓交替轮次 | test_thought_rules::test_thought_rules_present | ✅ |
+| TC-S7-06 | 阶段一·快改1：params_invalid 坏计划在 main_graph 被 `build_plan_interception` 拦截不进执行，返回结构化 error_code（缺目标参数→MISSING_PARAM、非对象→INVALID_TYPE）；正常计划不拦 | test_planner_params_guard::test_params_invalid_intercepted_with_error_code | ✅ |
+| TC-S7-07 | 阶段一·error_code 协议：loader 拦截坏参数→SkillResult.error_code=MISSING_PARAM、未注册技能→UNKNOWN_SKILL；skill 内"缺少…参数"文案在 loader 出口统一改写为 code，未分类错误保持 None 走字符串兜底 | test_planner_params_guard::test_error_code_protocol_on_loader_rejections | ✅ |
+| TC-S7-08 | 阶段一·correction 按 code 触发：`_build_correction_hints` 优先按 error_code 分支（文案不匹配也命中）、code 优先于字符串、无 code 时字符串兜底不回归、EXEC_FAILED 仅最后兜底 | test_planner_params_guard::test_correction_hints_branch_by_code | ✅ |
 
 ## S8 安全与守卫（危险请求拦截、正常请求放行、不越界读写）
 
@@ -105,6 +108,8 @@
 | TC-S8-04 | 正常内容 → 放行不拦 | test_agent（normal_content）+ test_components（guard normal） | ✅ |
 | TC-S8-05 | 提示注入句式 → 警告不拦截（现契约） | test_components::guard_check_prompt_injection | ✅ |
 | TC-S8-06 | 绝对路径逃逸（想写到任务目录之外/文件系统根）→ 拒绝 | test_file_operations::safe_path_check | ✅ |
+| TC-S8-07 | 阶段三·RunGuard 五道关卡：未注册→UNKNOWN_SKILL、契约缺参→MISSING_PARAM（保留"参数结构异常"文案）、结构类型错→INVALID_TYPE、未知键一期仅告警放行、路径逃逸（绝对系统路径/..//批量 files[]）与非法 URL 协议→PATH_ESCAPE | test_tool_guard（unknown/missing/type/unknown_key/path/url 6 例） | ✅ |
+| TC-S8-08 | 阶段三·熔断与审批门：连续失败≥2 第 3 次 begin 拒（CONSECUTIVE_FAILURE）、成功清零恢复；APPROVAL_MODE=deny 拒 write/exec/network（RISK_DENIED）而 read 放行、默认 auto 不拦；finish 记审计（duration_ms/error_code）供阶段六 JSONL；loader.execute 挂载点透传结构化 code | test_tool_guard（breaker/approval/loader/audit 4 例） | ✅ |
 
 ## S9 上下文预算（长对话不爆内存、关键信息不丢）
 
@@ -157,6 +162,9 @@
 | TC-S14-01 | 子图顺序执行 2 步 → 每步成功、结果齐 | test_components::sequential_execution | ✅ |
 | TC-S14-02 | 多结果整合：单结果/多结果都成文 | test_components（integrate×2） | ✅ |
 | TC-S14-03 | 技能装载：初始化、元数据、匹配、参数校验 | test_components（bootstrap/metadata/match/validate） | ✅ |
+| TC-S14-04 | 阶段二·注册中心 9/9：全部内置技能声明 risk/stage/operation_targets/usage（核心度量 1/9→9/9），timeout/retry 非负 | test_tool_registry::test_nine_nine_metadata_complete | ✅ |
+| TC-S14-05 | 阶段二·契约与校验：`*` 通配契约拦无 operation 技能的缺参（http_client 缺 url/search 缺 query/sandbox 无 code·file），file_operations 显式 op 契约不回归；非法 risk/stage 解析层 raise、缺失仅 warning 软约束 | test_tool_registry（star_contract/invalid_risk/missing_warns） | ✅ |
+| TC-S14-06 | 阶段二·查询 API：get_by_stage（规划期不含 sandbox/notification）、get_by_risk（exec={sandbox}）、get_guard_meta 切片（未注册 None） | test_tool_registry::test_registry_query_apis | ✅ |
 
 ## S15 真实 LLM 任务端到端（走完整 ReAct）
 

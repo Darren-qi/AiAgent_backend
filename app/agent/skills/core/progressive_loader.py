@@ -20,6 +20,10 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
+# 阶段二：Harness 元数据合法枚举（非法值在 _parse_frontmatter 拒绝）
+VALID_RISKS = ("read", "write", "exec", "network")
+VALID_STAGES = ("plan", "execute", "both")
+
 
 @dataclass
 class SkillMetadata:
@@ -32,6 +36,13 @@ class SkillMetadata:
     parameters: Dict[str, Any] = field(default_factory=dict)  # JSON Schema
     operation_targets: Dict[str, List[str]] = field(default_factory=dict)  # 操作→目标参数契约
     usage: str = ""  # 出错 JIT 注入的调用须知（渐进第三级）
+    # === 阶段二（2026-11-16）：对齐 AutoGen ToolMeta 的 Harness 元数据 ===
+    risk: str = ""  # read/write/exec/network（空=未声明，bootstrap 打 warning）
+    path_arg: str = ""  # 主路径参数名（如 path），供阶段三 safe_path 收口
+    url_arg: str = ""  # URL 参数名（如 url），供阶段三 safe_url
+    timeout: int = 0  # 执行超时秒数，0=用全局默认
+    retry: int = 0  # 瞬态重试次数（幂等 read/list 类才 >=1），0=不重试
+    stage: str = "both"  # plan/execute/both：阶段四 stage 白名单消费
     file_path: Path = field(default=None)
     skill_dir: Path = field(default=None)
 
@@ -45,6 +56,12 @@ class SkillMetadata:
             "parameters": self.parameters,
             "operation_targets": self.operation_targets,
             "usage": self.usage,
+            "risk": self.risk,
+            "path_arg": self.path_arg,
+            "url_arg": self.url_arg,
+            "timeout": self.timeout,
+            "retry": self.retry,
+            "stage": self.stage,
         }
 
     def matches_query(self, query: str) -> float:
@@ -244,6 +261,33 @@ class ProgressiveSkillLoader:
         # 简单 YAML 解析（支持基本类型）
         data = self._parse_yaml(yaml_str)
 
+        # === 阶段二校验：非法枚举硬拒绝（raise → bootstrap 跳过该技能）===
+        risk = str(data.get("risk") or "").strip().lower()
+        if risk and risk not in VALID_RISKS:
+            raise ValueError(
+                f"非法 risk={risk!r}（合法: {VALID_RISKS}）: {skill_md}")
+        stage = str(data.get("stage") or "").strip().lower() or "both"
+        if stage not in VALID_STAGES:
+            raise ValueError(
+                f"非法 stage={stage!r}（合法: {VALID_STAGES}）: {skill_md}")
+
+        try:
+            timeout = int(data.get("timeout") or 0)
+            retry = int(data.get("retry") or 0)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"timeout/retry 必须是整数: {skill_md}") from e
+
+        operation_targets = data.get("operation_targets") or {}
+        # 缺失软约束：先 warning 不拦（阶段二约定，测试断言 9/9 硬覆盖）
+        if not risk:
+            logger.warning(
+                "[ProgressiveLoader] %s 缺少 risk 声明（Harness 元数据不完整）",
+                skill_md)
+        if not operation_targets:
+            logger.warning(
+                "[ProgressiveLoader] %s 缺少 operation_targets 契约"
+                "（执行前无法做结构校验）", skill_md)
+
         return SkillMetadata(
             name=data.get("name", skill_dir.name),
             description=data.get("description", ""),
@@ -251,8 +295,14 @@ class ProgressiveSkillLoader:
             author=data.get("author", "system"),
             tags=data.get("tags", []),
             parameters=data.get("parameters", {}),
-            operation_targets=data.get("operation_targets") or {},
+            operation_targets=operation_targets,
             usage=data.get("usage") or "",
+            risk=risk,
+            path_arg=str(data.get("path_arg") or ""),
+            url_arg=str(data.get("url_arg") or ""),
+            timeout=max(timeout, 0),
+            retry=max(retry, 0),
+            stage=stage,
             file_path=skill_md,
             skill_dir=skill_dir,
         )
@@ -309,6 +359,36 @@ class ProgressiveSkillLoader:
     def get_all_metadata(self) -> List[SkillMetadata]:
         """获取所有 Skill 元数据"""
         return list(self._index.values())
+
+    # === 阶段二：注册中心查询 API（阶段三 RunGuard / 阶段四白名单消费）===
+
+    def get_by_stage(self, stage: str) -> List[SkillMetadata]:
+        """按阶段取技能：stage=plan 返回规划期可用集（both + plan）。"""
+        return [
+            m for m in self._index.values()
+            if m.stage == stage or m.stage == "both"
+        ]
+
+    def get_by_risk(self, risk: str) -> List[SkillMetadata]:
+        """按风险分级取技能（read/write/exec/network）。"""
+        return [m for m in self._index.values() if m.risk == risk]
+
+    def get_guard_meta(self, name: str) -> Optional[Dict[str, Any]]:
+        """RunGuard 消费的元数据切片（未注册返回 None → UNKNOWN_SKILL）。"""
+        m = self._index.get(name)
+        if not m:
+            return None
+        return {
+            "name": m.name,
+            "risk": m.risk,
+            "path_arg": m.path_arg,
+            "url_arg": m.url_arg,
+            "timeout": m.timeout,
+            "retry": m.retry,
+            "stage": m.stage,
+            "operation_targets": m.operation_targets,
+            "parameters": m.parameters,
+        }
 
     def get_full_content(self, name: str) -> Optional[str]:
         """
@@ -377,46 +457,68 @@ class ProgressiveSkillLoader:
             SkillResult 对象
         """
         from app.agent.skills.core.base_skill import SkillResult
+        from app.agent.skills.guard import tool_guard
 
-        # 参数结构崩坏防线（TC-S16-04，2026-11-14 生产取证）：按 skill
-        # frontmatter 的 operation_targets 契约校验，结构崩坏的 params
-        # 不执行——返回结构化错误走 observe correction，回注全量 schema
-        # +调用须知，让模型按正确形状重发（渐进第二/三级在错误时注入）。
-        _prob = validate_params_structure(name, params)
-        if _prob:
+        # 阶段三：RunGuard 单检查点（替换原 validate_params_structure L5 闸门；
+        # 语义不变——不通过不进 skill）。顺序：白名单→契约/类型→路径/URL 约束
+        # →连续失败熔断→风险门。拒绝返回结构化 code 走 correction。
+        deny = tool_guard.begin(name, params)
+        if deny:
             logger.warning(
-                "[ProgressiveLoader] 拦截参数结构异常 skill=%s: %s", name, _prob)
+                "[ProgressiveLoader] 守卫拒绝 skill=%s code=%s: %s",
+                name, deny["error_code"], deny["message"])
             return SkillResult(
-                success=False, error=f"{_prob}（参数结构异常，未执行）")
+                success=False,
+                error=deny["message"],
+                error_code=deny["error_code"],
+            )
+
+        def _done(result: "SkillResult") -> "SkillResult":
+            """统一出口：补 error_code + guard.finish（熔断计数/审计）。"""
+            result = _stamp_error_code(result)
+            tool_guard.finish(
+                name, ok=result.success, detail=result.error,
+                error_code=result.error_code)
+            return result
 
         # 优先使用注册的 executor
         if name in self._executors:
             try:
                 executor = self._executors[name]
                 result = await executor(**params)
-                return result
+                return _done(result)
             except asyncio.CancelledError:
-                raise  # 传播取消信号
+                raise  # 传播取消信号（超时/取消不计失败，由外层决定）
             except Exception as e:
                 logger.error(f"[ProgressiveLoader] 执行 {name} 失败: {e}")
-                return SkillResult(success=False, error=str(e))
+                return _done(SkillResult(
+                    success=False, error=str(e), error_code="EXEC_FAILED"))
 
         # 动态导入模块
         module = self._load_module(name)
         if not module:
-            return SkillResult(success=False, error=f"Skill '{name}' 未找到")
+            return _done(SkillResult(
+                success=False,
+                error=f"Skill '{name}' 未找到",
+                error_code="UNKNOWN_SKILL",
+            ))
 
         # 调用 execute 方法
         try:
             if hasattr(module, 'execute'):
-                return await module.execute(**params)
+                return _done(await module.execute(**params))
             else:
-                return SkillResult(success=False, error=f"Skill '{name}' 没有 execute 方法")
+                return _done(SkillResult(
+                    success=False,
+                    error=f"Skill '{name}' 没有 execute 方法",
+                    error_code="EXEC_FAILED",
+                ))
         except asyncio.CancelledError:
-            raise  # 传播取消信号
+            raise  # 传播取消信号（超时/取消不计失败，由外层决定）
         except Exception as e:
             logger.error(f"[ProgressiveLoader] 执行 {name} 出错: {e}")
-            return SkillResult(success=False, error=str(e))
+            return _done(SkillResult(
+                success=False, error=str(e), error_code="EXEC_FAILED"))
 
     def _load_module(self, name: str) -> Optional[Any]:
         """
@@ -539,9 +641,14 @@ def validate_params_structure(name: str, params: Any) -> Optional[str]:
     if not meta or not meta.operation_targets:
         return None
     op = str(params.get("operation") or "").strip().lower()
-    if not op or op not in meta.operation_targets:
+    # 阶段二：契约支持 "*" 通配（无 operation 参数的技能用它声明必有参数键）
+    if op and op in meta.operation_targets:
+        wanted = meta.operation_targets[op] or []
+    elif "*" in meta.operation_targets:
+        wanted = meta.operation_targets["*"] or []
+        op = op or "*"
+    else:
         return None
-    wanted = meta.operation_targets[op] or []
     if wanted and not any(k in params for k in wanted):
         return (
             f"operation={op} 缺少目标参数（{name} 需要 "
@@ -550,6 +657,39 @@ def validate_params_structure(name: str, params: Any) -> Optional[str]:
             "——参数结构疑似崩坏，禁止执行"
         )
     return None
+
+
+def classify_params_problem(prob: str) -> str:
+    """validate_params_structure 的问题描述 → error_code（阶段一协议）。
+
+    只分类已知形态；结构问题默认按缺参处理（MISSING_PARAM 是
+    生产最高频形态，TC-S16-04）。
+    """
+    if "不是 JSON 对象" in (prob or ""):
+        return "INVALID_TYPE"
+    return "MISSING_PARAM"
+
+
+def classify_tool_error(error: Optional[str]) -> Optional[str]:
+    """skill 返回的 error 文案 → error_code（缺参报错统一改写）。
+
+    只改写能高置信分类的形态；其余保持 None 走字符串兜底，
+    避免 EXEC_FAILED 顶掉"文件不存在"等更具体的修正策略。
+    """
+    if not error:
+        return None
+    if "缺少" in error and "参数" in error:
+        return "MISSING_PARAM"
+    if "未找到" in error:
+        return "UNKNOWN_SKILL"
+    return None
+
+
+def _stamp_error_code(result: "SkillResult") -> "SkillResult":
+    """给失败的 SkillResult 补 error_code（已有 code 不覆盖）。"""
+    if not result.success and result.error_code is None:
+        result.error_code = classify_tool_error(result.error)
+    return result
 
 
 # 全局加载器实例
