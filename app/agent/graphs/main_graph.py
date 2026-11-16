@@ -515,54 +515,6 @@ class AgentGraph:
             # 不抛出异常，避免阻塞主流程
             return None
 
-    def _generate_step_analysis(self, step: Dict[str, Any], step_index: int, total_steps: int) -> str:
-        """
-        生成每个步骤执行前的思考分析
-
-        Args:
-            step: 步骤信息
-            step_index: 步骤序号（从1开始）
-            total_steps: 总步骤数
-
-        Returns:
-            思考分析文本
-        """
-        action = step.get("action", "unknown")
-        description = step.get("description", "")
-        params = step.get("params", {})
-
-        action_descriptions = {
-            "code_generator": "根据需求生成代码文件",
-            "http_client": "发起HTTP请求获取数据",
-            "data_processor": "处理和转换数据",
-            "file_operations": "执行文件读写操作",
-            "search": "搜索相关信息",
-            "notification": "发送通知消息",
-            "general_response": "生成对话响应",
-        }
-
-        action_hint = action_descriptions.get(action, f"执行 {action} 操作")
-
-        analysis = f"**执行步骤 {step_index}/{total_steps}**\n\n"
-        analysis += f"- 动作：{action_hint}\n"
-        if description:
-            analysis += f"- 目标：{description}\n"
-
-        # 根据不同 action 添加具体参数提示
-        if action == "code_generator":
-            language = params.get("language", "未指定")
-            analysis += f"- 语言：{language}\n"
-        elif action == "http_client":
-            url = params.get("url", "未指定")
-            method = params.get("method", "GET")
-            analysis += f"- 请求：{method} {url}\n"
-        elif action == "file_operations":
-            operation = params.get("operation", "未指定")
-            analysis += f"- 操作：{operation}\n"
-
-        analysis += f"\n正在执行..."
-        return analysis
-
     def _format_step_observation(self, action: str, result: Dict[str, Any], files: List[Dict[str, Any]]) -> str:
         """生成人类可读的步骤观察消息"""
         success = result.get("success", True)
@@ -1331,6 +1283,7 @@ class AgentGraph:
         # 追踪工具调用历史，防止相同调用重复3次以上
         tool_call_history = []
         max_same_call = 3
+        exit_reason = None  # 循环退出原因：None=轮次预算耗尽 / duplicate_call=重复中断
         # 轮次预算：默认5轮；缺失清单每缩短一次（实质进展）追加2轮、上限16。
         # 否则"一个待办多个文件、每轮只落盘1个"会被固定5轮掐死
         # （2026-11-09 生产 task23：6文件待办写到第5轮、还差2个文件被判失败；
@@ -1583,6 +1536,7 @@ class AgentGraph:
                 last_error = f"相同调用已重复 {call_count} 次，无法继续。请尝试其他方法或任务失败。"
                 if on_step:
                     on_step("error", {"content": last_error, "todo_id": todo_id})
+                exit_reason = "duplicate_call"
                 break
             tool_call_history.append(call_key)
 
@@ -1933,12 +1887,28 @@ class AgentGraph:
             # 更新上下文，进入下一轮循环
             logger.info(f"[AgentGraph] 待办 {todo_id} 第 {loop_idx + 1} 次失败: {last_error}")
 
-        # 达到最大循环次数
-        logger.warning(f"[AgentGraph] 待办 {todo_id} 达到最大循环次数")
+        # 循环退出收尾（阶段五：区分退出原因，修"重复调用 break 误报
+        # 达到最大循环次数"的误导文案；轮次显示真实预算 _round_budget）
+        if exit_reason == "duplicate_call":
+            logger.warning(
+                f"[AgentGraph] 待办 {todo_id} 相同调用重复中断（上限 {max_same_call} 次）")
+            summary = (
+                f"相同调用重复达到上限({max_same_call}次)中断，未能完成。"
+                f"末次错误: {last_error}"
+            )
+        else:
+            logger.warning(f"[AgentGraph] 待办 {todo_id} 达到最大循环次数")
+            summary = (
+                f"达到最大循环次数({_round_budget})，未能完成。末次错误: {last_error}"
+            )
         return {
             "success": False,
-            "summary": f"达到最大循环次数({max_loop_iterations})，未能完成。末次错误: {last_error}",
-            "iteration": max_loop_iterations,
+            "summary": summary,
+            # 轮次=实际进入循环体的轮数：预算耗尽时 loop_idx 即轮数；
+            # 重复中断发生在第 loop_idx+1 轮内
+            "iteration": (
+                loop_idx + 1 if exit_reason == "duplicate_call" else loop_idx
+            ),
             "action": action,
         }
 
@@ -2048,118 +2018,6 @@ class AgentGraph:
         except Exception as e:
             logger.warning(f"[AgentGraph] 读取 session task_path 失败: {e}")
         return None
-
-    async def _observe_execution(
-        self,
-        iteration: int,
-        state: AgentState,
-        results: List[Dict[str, Any]],
-        context: ExecutionContext,
-    ) -> ObservationResult:
-        """
-        Observation 阶段: 观察执行情况，决定下一步行动
-
-        包括:
-        1. Supervisor 评估
-        2. 死循环检测
-        3. 迭代次数警告
-        """
-        # 1. Supervisor 步骤级评估
-        supervisor_decision = await self._supervisor.evaluate_step_results(results)
-
-        # 2. 死循环检测
-        loop_result = self._loop_detector.detect(context, state.plan or [])
-
-        # 合并结果
-        if loop_result.loop_status != LoopDetectionResult.NORMAL:
-            return loop_result
-
-        # 3. 预算检查
-        budget_status = state.context.get("budget_status", "normal")
-        if budget_status == "exhausted":
-            return ObservationResult(
-                loop_status=LoopDetectionResult.BUDGET_EXHAUSTED,
-                should_continue=False,
-                should_terminate=True,
-                termination_reason="预算已耗尽",
-                fallback_action="return_partial_results",
-                message="执行终止: 预算已耗尽"
-            )
-
-        return ObservationResult(
-            loop_status=LoopDetectionResult.NORMAL,
-            should_continue=True,
-            should_replan=supervisor_decision.action == "replan",
-            message=supervisor_decision.reason
-        )
-
-    async def _execute_parallel_with_deps(
-        self,
-        plan: List[Dict[str, Any]],
-        context: ExecutionContext,
-        on_step: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        并行执行计划，支持步骤依赖
-
-        使用拓扑排序分层执行：
-        - 每层内部并行
-        - 层间串行
-        """
-        # 1. 构建依赖图并拓扑排序
-        layers = self._build_execution_layers(plan)
-
-        all_results = []
-        for layer in layers:
-            # 2. 并行执行当前层
-            import asyncio
-            tasks = []
-            for step in layer:
-                timeout = context.get_timeout_for_action(step.get("action", ""))
-                tasks.append(
-                    self._execute_with_timeout(step, context, timeout, context.task_path)
-                )
-
-            layer_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # 3. 处理结果，为每一步发送 observation
-            processed_results = []
-            for i, result in enumerate(layer_results):
-                step = layer[i]
-                action_name = step.get("action", "")
-                if isinstance(result, Exception):
-                    result = {
-                        "success": False,
-                        "error": str(result),
-                        "action": action_name,
-                    }
-
-                files_created = self._extract_files_from_result(step, result)
-                obs_message = self._format_step_observation(action_name, result, files_created)
-
-                if on_step:
-                    on_step("observation", {
-                        "observation": obs_message,
-                        "files": files_created,
-                        "result": result,
-                        "tool_success": bool(result.get("success", True)),
-                    })
-
-                processed_results.append(result)
-
-            all_results.extend(processed_results)
-
-            # 4. 如果当前层有失败，检查是否需要停止
-            layer_failures = [r for r in processed_results if not r.get("success", True)]
-            if layer_failures:
-                # 记录失败但不立即停止，让后续层可以尝试
-                failed_indices = [
-                    len(all_results) - len(layer_results) + i
-                    for i, r in enumerate(layer_failures)
-                ]
-                context.failed_steps.extend(failed_indices)
-
-        return all_results
 
     async def _execute_with_timeout(
         self,
@@ -2297,26 +2155,8 @@ class AgentGraph:
                 "action": friendly_action or action,
             }
         except Exception as e:
-            # 备用：尝试从旧 registry 执行
-            try:
-                from app.agent.skills.registry import registry
-                skill = registry.get(action)
-                if skill:
-                    result = await skill.execute(**params)
-                    if _op == "write":
-                        _guard["last_write"] = (
-                            _write_paths if result.success else set())
-                    friendly_action = result.metadata.get("friendly_action") if result.metadata else None
-                    return {
-                        "success": result.success,
-                        "data": result.data,
-                        "error": result.error,
-                        "error_code": getattr(result, "error_code", None),
-                        "action": friendly_action or action,
-                    }
-            except:
-                pass
-
+            # 阶段五：删除旧 registry fallback（技能异常已在 loader.execute
+            # 内部兜底为 SkillResult，这里只兜 import/加载器级别的意外）
             if _op == "write":
                 _guard["last_write"] = set()
             return {
@@ -2325,267 +2165,6 @@ class AgentGraph:
                 "error_code": "EXEC_FAILED",
                 "action": action,
             }
-
-    def _build_execution_layers(
-        self,
-        plan: List[Dict[str, Any]],
-    ) -> List[List[Dict[str, Any]]]:
-        """
-        构建执行层次
-
-        根据 depends_on 字段进行拓扑排序，分层执行。
-        没有依赖的步骤在同一层并行执行。
-        """
-        if not plan:
-            return []
-
-        # 为每个步骤分配索引
-        indexed_plan = []
-        for i, step in enumerate(plan):
-            step_copy = step.copy()
-            step_copy["_index"] = i
-            indexed_plan.append(step_copy)
-
-        # 构建入度表和依赖图
-        in_degree = {i: 0 for i in range(len(indexed_plan))}
-        dependents = {i: [] for i in range(len(indexed_plan))}  # 谁依赖我
-
-        for i, step in enumerate(indexed_plan):
-            depends_on = step.get("depends_on", [])
-            for dep_idx in depends_on:
-                if 0 <= dep_idx < len(indexed_plan):
-                    in_degree[i] += 1
-                    dependents[dep_idx].append(i)
-
-        # Kahn算法拓扑排序并分层
-        layers = []
-        remaining = set(range(len(indexed_plan)))
-
-        while remaining:
-            # 找到入度为0的节点（当前层）
-            current_layer = [i for i in remaining if in_degree[i] == 0]
-
-            if not current_layer:
-                # 存在依赖循环，将剩余节点作为一层（可以正常执行）
-                current_layer = list(remaining)
-                # 降低日志级别，因为这在某些场景下是正常的（如多次调用同一skill生成不同文件）
-                logger.info(f"[AgentGraph] 存在依赖循环，已合并执行: {[indexed_plan[i].get('action') for i in current_layer]}")
-
-            # 添加当前层
-            layers.append([indexed_plan[i] for i in current_layer])
-
-            # 更新入度
-            for i in current_layer:
-                remaining.remove(i)
-                for dependent in dependents[i]:
-                    in_degree[dependent] -= 1
-
-        return layers
-
-    async def _execute_sequential_with_retry(
-        self,
-        plan: List[Dict[str, Any]],
-        context: ExecutionContext,
-        on_step: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        串行执行计划，支持重试
-        """
-        results = []
-
-        for i, step in enumerate(plan):
-            step_with_index = {**step, "step": i + 1}
-            action_name = step.get("action", "")
-            action_desc = step.get("description", "")
-
-            # 发送待办项开始
-            if on_step:
-                on_step("todo_start", {
-                    "todo": {
-                        "id": i + 1,
-                        "title": action_desc or f"步骤 {i + 1}",
-                        "total": len(plan),
-                        "current": i + 1
-                    }
-                })
-
-            # 执行步骤
-            timeout = context.get_timeout_for_action(step.get("action", ""))
-            result = await self._execute_with_timeout(
-                step_with_index, context, timeout, context.task_path
-            )
-
-            # Supervisor 步骤级检查
-            supervisor_decision = await self._supervisor.evaluate_step(step, result)
-
-            if supervisor_decision.action == "abort":
-                results.append({
-                    "step": i + 1,
-                    "action": step.get("action"),
-                    "result": result,
-                    "supervisor_abort": True,
-                    "abort_reason": supervisor_decision.reason,
-                })
-                if on_step:
-                    on_step("error", {"message": f"步骤 {i + 1} 被监督器终止: {supervisor_decision.reason}"})
-                break
-
-            results.append({
-                "step": i + 1,
-                "action": step.get("action"),
-                "result": result,
-            })
-            context.completed_steps = i + 1
-
-            # 发送待办项完成
-            if on_step:
-                on_step("todo_complete", {
-                    "todo": {
-                        "id": i + 1,
-                        "title": step.get("description", f"步骤 {i + 1}"),
-                        "success": result.get("success", True)
-                    }
-                })
-
-            # 发送执行结果
-            if on_step:
-                files_created = self._extract_files_from_result(step, result)
-                obs_message = self._format_step_observation(action_name, result, files_created)
-                on_step("observation", {
-                    "observation": obs_message,
-                    "files": files_created,
-                    "result": result,
-                    "success": result.get("success", True),
-                    "tool_success": bool(result.get("success", True)),
-                })
-
-            # 步骤失败处理
-            if not result.get("success", True):
-                context.failed_steps.append(i)
-                error = result.get("error", "")
-
-                if context.can_retry():
-                    new_result = await self._retry_step(step_with_index, context, error)
-                    if new_result.get("success", False):
-                        results[-1]["result"] = new_result
-                        results[-1]["retry_success"] = True
-                        context.reset_retry()
-                        continue
-                    else:
-                        context.increment_retry()
-
-                if i < len(plan) - 1:
-                    logger.warning(f"[AgentGraph] 步骤 {i + 1} 失败: {error}, 继续执行后续步骤")
-                else:
-                    context.last_error = error
-
-        return results
-
-    async def _retry_step(
-        self,
-        step: Dict[str, Any],
-        context: ExecutionContext,
-        previous_error: str,
-    ) -> Dict[str, Any]:
-        """重试单个步骤"""
-        error_lower = previous_error.lower()
-
-        # 根据错误类型调整参数
-        step_copy = step.copy()
-        params = step_copy.get("params", {}).copy()
-
-        if "timeout" in error_lower or "超时" in error_lower:
-            # 增加超时时间
-            params["timeout"] = min(
-                params.get("timeout", 60) * 2,
-                context.max_step_timeout
-            )
-            step_copy["params"] = params
-            logger.info(f"[AgentGraph] 重试步骤 {step.get('action')}: 增加超时到 {params.get('timeout')}s")
-        elif "connection" in error_lower or "连接" in error_lower:
-            # 添加重试延迟
-            import asyncio
-            await asyncio.sleep(2)
-            logger.info(f"[AgentGraph] 重试步骤 {step.get('action')}: 等待后重试")
-
-        # 执行重试
-        timeout = context.get_timeout_for_action(step.get("action", ""))
-        return await self._execute_with_timeout(step_copy, context, timeout)
-
-    async def _handle_partial_failure(
-        self,
-        state: AgentState,
-        results: List[Dict[str, Any]],
-        context: ExecutionContext,
-        on_step: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> Dict[str, Any]:
-        """
-        处理部分失败
-
-        尝试修复失败的步骤或调整后续计划。
-        """
-        failed_results = [
-            r for r in results
-            if isinstance(r, dict) and not r.get("result", {}).get("success", True)
-        ]
-
-        if not failed_results:
-            return {"continued": True}
-
-        # 尝试重规划
-        errors = [r.get("result", {}).get("error", "未知错误") for r in failed_results]
-        combined_error = "; ".join(errors)
-
-        new_plan = await self._replanner.replan(state, combined_error)
-
-        if new_plan:
-            state.plan = new_plan
-            state.error = None
-            context.alternate_plans.append(new_plan)
-
-            if on_step:
-                on_step("planning", {"content": "重规划执行计划"})
-                on_step("todos", {"todos": new_plan})
-
-            return {"continued": True, "replanned": True}
-
-        # 无法重规划，检查是否可以继续
-        return {"continued": False, "reason": "无法重规划"}
-
-    async def _emergency_recovery(
-        self,
-        state: AgentState,
-        context: ExecutionContext,
-        on_step: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> bool:
-        """
-        紧急恢复
-
-        当规划失败时的最后尝试。
-        """
-        context.recovery_attempts += 1
-
-        if context.recovery_attempts >= 2:
-            state.error = "多次规划失败，无法生成执行计划"
-            return False
-
-        # 尝试使用通用响应
-        logger.warning(f"[AgentGraph] 规划失败，尝试紧急恢复 (尝试 {context.recovery_attempts})")
-
-        # 生成一个简单的 fallback plan
-        state.plan = [
-            {
-                "step": 1,
-                "action": "general_response",
-                "params": {
-                    "message": f"无法为任务 '{state.task}' 生成具体执行计划。"
-                               f"请提供更详细的描述或更具体的指令。"
-                },
-                "description": "通用响应",
-            }
-        ]
-
-        return True
 
     async def _safety_check(self, state: AgentState) -> AgentState:
         """输入安全检查"""

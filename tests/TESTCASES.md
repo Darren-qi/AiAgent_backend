@@ -97,6 +97,8 @@
 | TC-S7-06 | 阶段一·快改1：params_invalid 坏计划在 main_graph 被 `build_plan_interception` 拦截不进执行，返回结构化 error_code（缺目标参数→MISSING_PARAM、非对象→INVALID_TYPE）；正常计划不拦 | test_planner_params_guard::test_params_invalid_intercepted_with_error_code | ✅ |
 | TC-S7-07 | 阶段一·error_code 协议：loader 拦截坏参数→SkillResult.error_code=MISSING_PARAM、未注册技能→UNKNOWN_SKILL；skill 内"缺少…参数"文案在 loader 出口统一改写为 code，未分类错误保持 None 走字符串兜底 | test_planner_params_guard::test_error_code_protocol_on_loader_rejections | ✅ |
 | TC-S7-08 | 阶段一·correction 按 code 触发：`_build_correction_hints` 优先按 error_code 分支（文案不匹配也命中）、code 优先于字符串、无 code 时字符串兜底不回归、EXEC_FAILED 仅最后兜底 | test_planner_params_guard::test_correction_hints_branch_by_code | ✅ |
+| TC-S7-09 | 阶段五·瞬态重试：retry=1 的 search 瞬态失败退避重试 1 次后成功；写类 retry=0 只调 1 次；重试耗尽回 EXEC_FAILED 并计熔断；结构类拒绝（MISSING_PARAM）不重试 | test_transient_retry（4 例） | ✅ |
+| TC-S7-10 | 阶段五·死代码清理与文案：`_execute_sequential_with_retry/_retry_step/_execute_parallel_with_deps/_observe_execution/_handle_partial_failure/_emergency_recovery/_build_execution_layers/_generate_step_analysis` 与 main_graph registry fallback 全仓引用归零；重复调用 break 的 summary 报"相同调用重复达到上限"而非误报"达到最大循环次数"（轮次显示真实预算 _round_budget） | grep 归零 + 既有循环用例不回归（门禁） | ✅ |
 
 ## S8 安全与守卫（危险请求拦截、正常请求放行、不越界读写）
 

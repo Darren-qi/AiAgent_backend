@@ -481,44 +481,77 @@ class ProgressiveSkillLoader:
                 error_code=result.error_code)
             return result
 
+        # 阶段五：瞬态重试——按 registry retry 元数据（幂等 read/list 类
+        # retry≥1，写类默认 0）。只重试"执行期失败"（EXEC_FAILED 或未分类），
+        # 结构类拒绝（MISSING_PARAM 等）确定性失败不重试；不复活
+        # _execute_sequential_with_retry 死代码，loader 层轻量实现。
+        meta = self._index.get(name)
+        max_retry = max(0, int(getattr(meta, "retry", 0) or 0)) if meta else 0
+        attempts = 1 + max_retry
+        result: "SkillResult" = None
+        for i in range(attempts):
+            result = _stamp_error_code(await self._invoke(name, params))
+            _transient = (
+                not result.success
+                and result.error_code in (None, "EXEC_FAILED")
+            )
+            if not _transient or i >= attempts - 1:
+                # 重试已耗尽的未分类失败归一 EXEC_FAILED（计划验收）；
+                # retry=0 无"耗尽"概念，保持 None 走字符串兜底（阶段一语义）
+                if _transient and max_retry > 0 and result.error_code is None:
+                    result.error_code = "EXEC_FAILED"
+                break
+            delay = 0.5 * (i + 1)  # 简单线性退避
+            logger.warning(
+                "[ProgressiveLoader] %s 瞬态失败，退避重试 %d/%d (%.1fs): %s",
+                name, i + 1, max_retry, delay, str(result.error)[:200])
+            await asyncio.sleep(delay)
+        return _done(result)
+
+    async def _invoke(self, name: str, params: Dict[str, Any]) -> "SkillResult":
+        """单次技能调用（executor 优先，其次动态模块），不带守卫/重试。
+
+        所有技能级异常在内部兜底为 SkillResult，不向外抛
+        （CancelledError 除外——超时/取消由外层决定计数）。
+        """
+        from app.agent.skills.core.base_skill import SkillResult
+
         # 优先使用注册的 executor
         if name in self._executors:
             try:
                 executor = self._executors[name]
-                result = await executor(**params)
-                return _done(result)
+                return await executor(**params)
             except asyncio.CancelledError:
                 raise  # 传播取消信号（超时/取消不计失败，由外层决定）
             except Exception as e:
                 logger.error(f"[ProgressiveLoader] 执行 {name} 失败: {e}")
-                return _done(SkillResult(
-                    success=False, error=str(e), error_code="EXEC_FAILED"))
+                return SkillResult(
+                    success=False, error=str(e), error_code="EXEC_FAILED")
 
         # 动态导入模块
         module = self._load_module(name)
         if not module:
-            return _done(SkillResult(
+            return SkillResult(
                 success=False,
                 error=f"Skill '{name}' 未找到",
                 error_code="UNKNOWN_SKILL",
-            ))
+            )
 
         # 调用 execute 方法
         try:
             if hasattr(module, 'execute'):
-                return _done(await module.execute(**params))
-            else:
-                return _done(SkillResult(
-                    success=False,
-                    error=f"Skill '{name}' 没有 execute 方法",
-                    error_code="EXEC_FAILED",
-                ))
+                return await module.execute(**params)
+            return SkillResult(
+                success=False,
+                error=f"Skill '{name}' 没有 execute 方法",
+                error_code="EXEC_FAILED",
+            )
         except asyncio.CancelledError:
             raise  # 传播取消信号（超时/取消不计失败，由外层决定）
         except Exception as e:
             logger.error(f"[ProgressiveLoader] 执行 {name} 出错: {e}")
-            return _done(SkillResult(
-                success=False, error=str(e), error_code="EXEC_FAILED"))
+            return SkillResult(
+                success=False, error=str(e), error_code="EXEC_FAILED")
 
     def _load_module(self, name: str) -> Optional[Any]:
         """
