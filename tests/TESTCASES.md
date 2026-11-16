@@ -165,6 +165,8 @@
 | TC-S14-04 | 阶段二·注册中心 9/9：全部内置技能声明 risk/stage/operation_targets/usage（核心度量 1/9→9/9），timeout/retry 非负 | test_tool_registry::test_nine_nine_metadata_complete | ✅ |
 | TC-S14-05 | 阶段二·契约与校验：`*` 通配契约拦无 operation 技能的缺参（http_client 缺 url/search 缺 query/sandbox 无 code·file），file_operations 显式 op 契约不回归；非法 risk/stage 解析层 raise、缺失仅 warning 软约束 | test_tool_registry（star_contract/invalid_risk/missing_warns） | ✅ |
 | TC-S14-06 | 阶段二·查询 API：get_by_stage（规划期不含 sandbox/notification）、get_by_risk（exec={sandbox}）、get_guard_meta 切片（未注册 None） | test_tool_registry::test_registry_query_apis | ✅ |
+| TC-S14-07 | 阶段四·动态白名单：stage="plan" 只读集注入（验收：规划期 prompt 不出现 file_operations/sandbox/http_client 等 write/exec/network 类）；stage=None/execute 全量 9/9 不回归；tool_deny_risks 黑名单（network,exec）生效且默认空不回归；planner 调用点透传 | test_skill_whitelist（plan_stage/execute_default/deny_risks/pure/planner_pass 5 例） | ✅ |
+| TC-S14-08 | 阶段四·prompt 同步试点：file_operations 参数段从 frontmatter 渲染（全量参数键+usage 规则"不能是 Python 代码/≤4文件"+operation 枚举），替代 prompt 硬编码段防双份漂移 | test_skill_whitelist::test_render_skill_params_from_frontmatter | ✅ |
 
 ## S15 真实 LLM 任务端到端（走完整 ReAct）
 

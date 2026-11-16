@@ -435,11 +435,15 @@ class Planner:
             self._llm_factory = LLMFactory.get_instance()
         return self._llm_factory
 
-    def _get_skill_list_str(self) -> str:
-        """生成 Skill 列表字符串（从渐进式加载器获取）"""
+    def _get_skill_list_str(self, stage: Optional[str] = None) -> str:
+        """生成 Skill 列表字符串（从渐进式加载器获取）。
+
+        阶段四：stage=None 全量（默认不回归）；stage="plan" 规划早期只读集；
+        stage="execute" 执行期全量。tool_deny_risks 黑名单在 loader 内叠加。
+        """
         try:
             loader = get_loader()
-            return loader.get_skill_list_str()
+            return loader.get_skill_list_str(stage=stage)
         except Exception as e:
             logger.warning(f"[Planner] 获取 Skill 列表失败: {e}，使用备用方案")
             # 备用：使用 AVAILABLE_SKILLS
@@ -632,7 +636,7 @@ class Planner:
         Returns:
             动作配置 {action, params, reason}
         """
-        skill_list = self._get_skill_list_str()
+        skill_list = self._get_skill_list_str(stage="execute")
 
         prompt = PLANNING_PROMPT.format(
             task=task,
@@ -703,6 +707,37 @@ class Planner:
             logger.warning(f"[Planner] 获取 skill schema 失败: {e}")
         return ""
 
+    def _render_skill_params(self, skill_name: str) -> str:
+        """阶段四试点：从 frontmatter 渲染技能参数说明段（唯一权威）。
+
+        避免 prompt 硬编码参数列表与 SKILL.md frontmatter 漂移——
+        file_operations 试点，其余技能随后续阶段跟进。
+        """
+        try:
+            meta = get_loader().get_metadata(skill_name)
+            if not meta:
+                return f"   - {skill_name}: （未注册）"
+            props = ((meta.parameters or {}).get("properties")) or {}
+            lines = [
+                f"   - {skill_name}（参数必须是 JSON 对象，键名用下面列出的）:"
+            ]
+            for key, spec in props.items():
+                spec = spec or {}
+                req = "必填" if spec.get("required") else "可选"
+                desc = str(spec.get("description") or "").strip()
+                enum = spec.get("enum")
+                extra = (
+                    f"，可选值: {', '.join(str(x) for x in enum)}"
+                    if enum else ""
+                )
+                lines.append(f"     - {key}（{req}）: {desc}{extra}")
+            if meta.usage:
+                lines.append(f"     - 调用须知: {meta.usage}")
+            return "\n".join(lines)
+        except Exception as e:  # noqa: BLE001 - 渲染失败不阻塞规划
+            logger.warning("[Planner] 渲染 %s 参数段失败: %s", skill_name, e)
+            return ""
+
     async def plan_action_with_feedback(
         self,
         task: str,
@@ -730,7 +765,8 @@ class Planner:
         Returns:
             动作配置 {action, params, reason}
         """
-        skill_list = self._get_skill_list_str()
+        # todos 已建 → 执行期（阶段四：执行期全量注入）
+        skill_list = self._get_skill_list_str(stage="execute")
 
         # 如果有错误，在 prompt 中添加错误反馈
         feedback_section = ""
@@ -754,6 +790,8 @@ class Planner:
 **重要**: 必须修正上一步缺失的参数，特别是 `path` 参数必须明确指定值。
 """ + (self._skill_schema_hint(last_action) if _need_schema else "")
 
+        # 阶段四试点：file_operations 参数段从 frontmatter 渲染（唯一权威）
+        file_ops_doc = self._render_skill_params("file_operations")
         prompt = f"""基于你的思考，制定具体的执行动作。
 
 ## 用户任务
@@ -773,10 +811,7 @@ title: {todo.get("title", "")}
 ## 输出要求（必须遵守）
 1. 动作名称必须是上面列表中的有效名称
 2. **参数必须完整且具体**:
-   - file_operations: 必须包含 path、operation
-     - path 必须是合法的文件路径，例如: "app.py", "routes/__init__.py", "templates/index.html"
-     - **path 不能包含 Python 代码**，不能是 "@app.route('/')" 这样的内容
-     - 目标参数按 operation 必选其一：write/read→path 或 files[]；edit→path 或 edits[]；delete→path/files[]/paths[]；move→path 或 files[]——批量单次≤4文件、总内容≤6000字，超出拆多次调用（防输出截断成残缺 JSON）
+{file_ops_doc}
    - http_client: 必须包含 url
    - code_generator: 必须包含 requirements/language
 3. 如果上一步失败，必须修正对应的参数
@@ -1336,7 +1371,8 @@ title: {todo.get("title", "")}
 
     async def _create_plan_with_llm(self, task: str, intent: str) -> Optional[List[Dict[str, Any]]]:
         """使用 LLM 生成执行计划"""
-        skill_list = self._get_skill_list_str()
+        # 规划早期（todos 未建）→ 只读集（阶段四白名单）
+        skill_list = self._get_skill_list_str(stage="plan")
 
         # 尝试检索相似经验（如果有经验库）
         similar_experiences = await self._retrieve_similar_experiences(task)

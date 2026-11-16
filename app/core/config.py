@@ -181,6 +181,10 @@ class Settings(BaseSettings):
         default=2,
         description="工具级连续失败熔断阈值：连续失败 N 次后第 N+1 次调用被拒（与调用级同 call_key≥3 并存）"
     )
+    tool_deny_risks: str = Field(
+        default="",
+        description="阶段四：风险级黑名单，逗号分隔（如 network,exec）；默认空=不过滤"
+    )
 
     # =========================================
     # 配置验证

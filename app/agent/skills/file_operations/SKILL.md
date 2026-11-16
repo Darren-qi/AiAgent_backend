@@ -85,7 +85,8 @@ operation_targets:
   delete: [path, files, paths]
   move: [path, files, from, src]
 # 出错 JIT 时随全量参数 schema 一起注入（第三级：选定工具后的具体使用方法）
-usage: "params 必须是 JSON 对象且键必须是已声明参数；目标参数按 operation 必选其一：write/read→path 或 files[]，edit→path 或 edits[]，delete→path、files[] 或 paths[]，move→path 或 files[]，list/create→path。批量单次≤4文件、总内容≤6000字，超出拆多次调用。缺目标参数被拦时补 path 或改用 files 批量，禁止把大段文件内容塞进单个参数。"
+# 也是规划 prompt 参数段的唯一权威（阶段四试点：prompt 硬编码段改为引用本字段）
+usage: "params 必须是 JSON 对象且键必须是已声明参数；path 必须是合法文件路径（如 app.py、routes/__init__.py），不能是 Python 代码（如 @app.route('/')）；目标参数按 operation 必选其一：write/read→path 或 files[]，edit→path 或 edits[]，delete→path、files[] 或 paths[]，move→path 或 files[]，list/create→path。批量单次≤4文件、总内容≤6000字，超出拆多次调用。缺目标参数被拦时补 path 或改用 files 批量，禁止把大段文件内容塞进单个参数。"
 ---
 
 # File Operations Skill

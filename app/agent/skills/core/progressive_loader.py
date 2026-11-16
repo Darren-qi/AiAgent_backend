@@ -604,18 +604,68 @@ class ProgressiveSkillLoader:
         """获取所有 Skill 的 Schema（用于 LLM 规划）"""
         return [m.to_dict() for m in self._index.values()]
 
-    def get_skill_list_str(self) -> str:
+    def get_skill_list_str(self, stage: Optional[str] = None) -> str:
         """
         获取 Skill 列表字符串（用于 prompt）
+
+        阶段四动态白名单：
+        - stage=None/"execute"：全量（stage 兼容 execute/both 的技能，当前
+          元数据下即 9/9——默认行为不回归，风险表约定"白名单先在测试开启"）
+        - stage="plan"：规划早期只读集（stage 兼容 plan/both 且 risk=read）
+        - tool_deny_risks 配置（逗号分隔）叠加过滤，默认空不过滤
 
         格式：
         skill_name: 描述 [tags]
         """
+        deny_risks = self._load_deny_risks()
+        metas = filter_skills_by_policy(
+            self._index.values(), stage=stage, deny_risks=deny_risks)
         lines = []
-        for metadata in self._index.values():
+        for metadata in metas:
             tags_str = f" [{','.join(metadata.tags)}]" if metadata.tags else ""
             lines.append(f"- {metadata.name}: {metadata.description}{tags_str}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _load_deny_risks() -> Set[str]:
+        """读取 tool_deny_risks 配置（默认空=不过滤）。"""
+        try:
+            from app.core.config import get_settings
+            raw = get_settings().tool_deny_risks or ""
+            return {
+                r.strip().lower() for r in raw.split(",") if r.strip()
+            }
+        except Exception:  # noqa: BLE001 - 配置不可用不阻塞注入
+            return set()
+
+
+def filter_skills_by_policy(
+    metas: Any,
+    stage: Optional[str] = None,
+    deny_risks: Optional[Set[str]] = None,
+) -> list:
+    """阶段四动态白名单过滤（纯函数，供 get_skill_list_str 与测试共用）。
+
+    - stage="plan"：规划早期只读集——stage 兼容（plan/both）且 risk=="read"，
+      write/exec/network 技能不进规划 prompt（验收：规划期不出现 write/delete 类）
+    - stage="execute" 或 None：stage 兼容（execute/both）；None 时不做 stage
+      过滤（默认全量，防"白名单切断合法规划"——风险表约定测试先行）
+    - deny_risks：风险级黑名单（如 {"network"}），任何 stage 下都生效
+    """
+    deny_risks = deny_risks or set()
+    out = []
+    for m in metas:
+        if stage == "plan":
+            if m.stage not in ("plan", "both") or m.risk != "read":
+                continue
+        elif stage == "execute":
+            if m.stage not in ("execute", "both"):
+                continue
+        # stage=None → 不做 stage 过滤
+        if deny_risks and (m.risk or "").lower() in deny_risks:
+            continue
+        out.append(m)
+    return out
 
 
 def validate_params_structure(name: str, params: Any) -> Optional[str]:
