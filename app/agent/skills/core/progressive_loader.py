@@ -161,9 +161,14 @@ class ProgressiveSkillLoader:
 
         # 模块缓存（执行时加载）
         self._module_cache: Dict[str, Any] = {}
+        # 模块文件 mtime（阶段七：变更即失效重载，改 skill.py 不用重启进程）
+        self._module_mtimes: Dict[str, float] = {}
 
         # Skill 执行器工厂
         self._executors: Dict[str, Callable] = {}
+
+        # 阶段七：运行时下架集合（guard 白名单同步拒绝、prompt 注入剔除）
+        self._disabled: Set[str] = set()
 
         # 是否已初始化
         self._bootstrapped = False
@@ -366,17 +371,21 @@ class ProgressiveSkillLoader:
         """按阶段取技能：stage=plan 返回规划期可用集（both + plan）。"""
         return [
             m for m in self._index.values()
-            if m.stage == stage or m.stage == "both"
+            if m.name not in self._disabled
+            and (m.stage == stage or m.stage == "both")
         ]
 
     def get_by_risk(self, risk: str) -> List[SkillMetadata]:
         """按风险分级取技能（read/write/exec/network）。"""
-        return [m for m in self._index.values() if m.risk == risk]
+        return [
+            m for m in self._index.values()
+            if m.name not in self._disabled and m.risk == risk
+        ]
 
     def get_guard_meta(self, name: str) -> Optional[Dict[str, Any]]:
-        """RunGuard 消费的元数据切片（未注册返回 None → UNKNOWN_SKILL）。"""
+        """RunGuard 消费的元数据切片（未注册/已下架返回 None → UNKNOWN_SKILL）。"""
         m = self._index.get(name)
-        if not m:
+        if not m or name in self._disabled:
             return None
         return {
             "name": m.name,
@@ -444,6 +453,27 @@ class ProgressiveSkillLoader:
             executor: 执行器函数/类
         """
         self._executors[name] = executor
+
+    # === 阶段七：热插拔（运行时注册/下架）===
+
+    def disable_skill(self, name: str) -> bool:
+        """运行时下架：guard 白名单同步拒绝（UNKNOWN_SKILL）、
+        prompt 注入剔除、模块缓存清除。返回是否命中。"""
+        if name not in self._index:
+            return False
+        self._disabled.add(name)
+        self._module_cache.pop(name, None)
+        self._module_mtimes.pop(name, None)
+        logger.info("[ProgressiveLoader] 技能已下架: %s", name)
+        return True
+
+    def enable_skill(self, name: str) -> bool:
+        """重新上架（撤销 disable_skill）。返回是否曾处于下架状态。"""
+        was = name in self._disabled
+        self._disabled.discard(name)
+        if was:
+            logger.info("[ProgressiveLoader] 技能已重新上架: %s", name)
+        return was
 
     async def execute(self, name: str, params: Dict[str, Any]) -> "SkillResult":
         """
@@ -584,9 +614,6 @@ class ProgressiveSkillLoader:
         Returns:
             加载的模块
         """
-        if name in self._module_cache:
-            return self._module_cache[name]
-
         metadata = self._index.get(name)
         if not metadata or not metadata.skill_dir:
             return None
@@ -596,6 +623,27 @@ class ProgressiveSkillLoader:
         if not skill_file.exists():
             logger.warning(f"[ProgressiveLoader] {name} 没有 skill.py")
             return None
+
+        # 阶段七：记录 mtime——缓存命中时校验文件是否已变更，变更即
+        # importlib.reload 热重载（技能改 skill.py 不用重启进程）
+        try:
+            mtime = skill_file.stat().st_mtime
+        except OSError:
+            mtime = None
+
+        cached = self._module_cache.get(name)
+        if cached is not None:
+            known = self._module_mtimes.get(name)
+            if mtime is None or known == mtime:
+                return cached
+            try:
+                importlib.reload(cached)
+                self._module_mtimes[name] = mtime
+                logger.info("[ProgressiveLoader] 热重载（skill.py mtime 变化）: %s", name)
+                return cached
+            except Exception as e:  # noqa: BLE001 - 重载失败回退旧模块继续服务
+                logger.error(f"[ProgressiveLoader] {name} 热重载失败，回退旧模块: {e}")
+                return cached
 
         # 构建模块名
         parts = metadata.skill_dir.parts
@@ -614,6 +662,8 @@ class ProgressiveSkillLoader:
         try:
             module = importlib.import_module(module_name)
             self._module_cache[name] = module
+            if mtime is not None:
+                self._module_mtimes[name] = mtime
             return module
         except Exception as e:
             logger.error(f"[ProgressiveLoader] 导入 {name} 模块失败: {e}")
@@ -676,6 +726,8 @@ class ProgressiveSkillLoader:
             self._index.values(), stage=stage, deny_risks=deny_risks)
         lines = []
         for metadata in metas:
+            if metadata.name in self._disabled:
+                continue  # 阶段七：运行时下架的技能不进 prompt
             tags_str = f" [{','.join(metadata.tags)}]" if metadata.tags else ""
             lines.append(f"- {metadata.name}: {metadata.description}{tags_str}")
         return "\n".join(lines)
@@ -819,3 +871,20 @@ def bootstrap() -> int:
     """引导全局加载器"""
     loader = get_loader()
     return loader.bootstrap()
+
+
+# === 阶段七：热插拔对外 API（包装全局 loader）===
+
+def register_skill_executor(name: str, executor: Callable) -> None:
+    """运行时注册技能执行器（优先于动态模块执行）。"""
+    get_loader().register_executor(name, executor)
+
+
+def disable_skill(name: str) -> bool:
+    """运行时下架技能：guard 白名单同步拒绝、prompt 注入剔除。"""
+    return get_loader().disable_skill(name)
+
+
+def enable_skill(name: str) -> bool:
+    """重新上架技能。"""
+    return get_loader().enable_skill(name)

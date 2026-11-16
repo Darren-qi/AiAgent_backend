@@ -172,6 +172,8 @@
 | TC-S14-07 | 阶段四·动态白名单：stage="plan" 只读集注入（验收：规划期 prompt 不出现 file_operations/sandbox/http_client 等 write/exec/network 类）；stage=None/execute 全量 9/9 不回归；tool_deny_risks 黑名单（network,exec）生效且默认空不回归；planner 调用点透传 | test_skill_whitelist（plan_stage/execute_default/deny_risks/pure/planner_pass 5 例） | ✅ |
 | TC-S14-08 | 阶段四·prompt 同步试点：file_operations 参数段从 frontmatter 渲染（全量参数键+usage 规则"不能是 Python 代码/≤4文件"+operation 枚举），替代 prompt 硬编码段防双份漂移 | test_skill_whitelist::test_render_skill_params_from_frontmatter | ✅ |
 | TC-S14-09 | 阶段六·Trace 最小闭环：run 日志（无 session 禁用、路径 `{session}_{ts}.jsonl`、request_id 贯穿、params 只存摘要不存全文）；guard.finish 返回 duration 事件；loader 出口 duration 挂 SkillResult.metadata + JSONL `tool_call`/`guard_deny` 事件 | test_trace（7 例） | ✅ |
+| TC-S14-10 | 阶段七·热插拔：register_skill_executor 运行时注册→立即可调用；disable_skill 下架→guard 白名单拒 UNKNOWN_SKILL、prompt/查询 API 同步剔除、enable 恢复；skill.py mtime 变化→下次加载 importlib.reload（未变不重复 reload）；未知名下架/恢复返回 False | test_hotplug（4 例） | ✅ |
+| TC-S14-11 | 阶段七·依赖收口：pyproject 移除零接入的 opentelemetry×3 + langfuse 声明（代码 grep 零引用），overview.md 可观测行同步 | pyproject diff + grep 归零 | ✅ |
 
 ## S15 真实 LLM 任务端到端（走完整 ReAct）
 

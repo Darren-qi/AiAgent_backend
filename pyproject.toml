@@ -79,11 +79,8 @@ dependencies = [
     # Docker 沙箱
     "docker>=7.0.0",
 
-    # 可观测性
-    "opentelemetry-api>=1.22.0",
-    "opentelemetry-sdk>=1.22.0",
-    "opentelemetry-instrumentation-fastapi>=0.43b0",
-    "langfuse>=2.0.0",
+    # 可观测性：OTel/Langfuse 依赖已移除（阶段七 2026-11-17——代码零接入的
+    # 漂移声明；Trace 走自研 JSONL+loguru，见 app/agent/trace.py）
 ]
 
 [project.optional-dependencies]

@@ -16,7 +16,7 @@ RiffCode 智能体后端：接收自然语言任务 → 意图识别 → 规划/
 | 数据库 | PostgreSQL + SQLAlchemy 2.0（asyncpg）+ Alembic + Redis | 异步会话，迁移 00N_ 手写编号 |
 | AI 编排 | LangGraph + LangChain；DeepSeek/Kimi/智谱/OpenAI/Anthropic/Gemini/MiniMax/Ollama | 多 Provider 路由与预算控制 |
 | 配置 | pydantic-settings + `.env` | `get_settings()` 单例 |
-| 可观测 | loguru 文本日志 + execution_nodes 落库 + SSE 事件流 | ⚠️ OpenTelemetry/Langfuse 仅在 pyproject 声明依赖，**代码零接入**（详见调研结论） |
+| 可观测 | loguru 文本日志（含 request_id / LLM 打点）+ execution_nodes 落库 + JSONL run 日志（`logs/runs/`）+ SSE 事件流 | ✅ OTel/Langfuse 零接入依赖已从 pyproject 移除（阶段七 2026-11-17，消除声明漂移） |
 | 测试/质量 | pytest（asyncio auto）、ruff（line-length 100）、mypy | 黄金门禁 `run_golden.py` |
 
 ## 2. 整体架构图
