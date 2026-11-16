@@ -30,12 +30,25 @@ def setup_logger(
     # 移除默认的 handler
     logger.remove()
 
+    # 阶段六：request_id 贯穿——patcher 给每条记录注入 contextvar 里的
+    # 请求 ID（懒加载 import 防循环依赖：request_id 模块 import 本模块）
+    def _patch_request_id(record: dict) -> None:
+        try:
+            from app.middleware.request_id import get_request_id
+            rid = get_request_id()
+        except Exception:  # noqa: BLE001 - 日志注入失败不影响记录本身
+            rid = ""
+        record["extra"]["request_id"] = rid or "-"
+
+    logger.configure(patcher=_patch_request_id)
+
     # 配置日志格式
-    # 包含时间、日志级别、模块名、行号、请求ID（如果存在）
+    # 包含时间、日志级别、模块名、行号、请求ID
     format_string = (
         "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
         "<level>{level: <8}</level> | "
         "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
+        "<level>[{extra[request_id]}]</level> | "
         "<level>{message}</level>"
     )
 

@@ -239,10 +239,12 @@ class ToolGuard:
         ok: bool,
         detail: Optional[str] = None,
         error_code: Optional[str] = None,
-    ) -> None:
-        """执行结果回执：更新熔断计数 + 记审计事件。
+    ) -> Dict[str, Any]:
+        """执行结果回执：更新熔断计数 + 记审计事件，返回该事件。
 
         ok=True 清零连续失败；ok=False 累加。用户取消不经此路（不计失败）。
+        返回的事件含 duration_ms，供 loader 挂到 SkillResult.metadata
+        （阶段六 → execution_nodes.meta_data 落库）。
         """
         duration_ms = None
         started = self._start_times.pop(name, None)
@@ -254,7 +256,7 @@ class ToolGuard:
         else:
             self._fail_counts[name] = self._fail_counts.get(name, 0) + 1
 
-        self._audit.append({
+        ev = {
             "event": "tool_call",
             "tool": name,
             "ok": ok,
@@ -262,7 +264,9 @@ class ToolGuard:
             "detail": (str(detail)[:300] if detail else None),
             "duration_ms": duration_ms,
             "ts": time.time(),
-        })
+        }
+        self._audit.append(ev)
+        return ev
 
     # ---------- 观测接口 ----------
 

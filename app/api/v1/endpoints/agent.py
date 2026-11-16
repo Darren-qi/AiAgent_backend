@@ -744,10 +744,22 @@ async def _load_db_messages(db, session_id: str) -> tuple[list, list]:
                 continue
             step = {"type": step_type_map.get(n.node_type, "thinking"),
                     "content": content[:2000]}
+            # 阶段六回放补字段：created_at 全类型带；duration_ms/error_code
+            # 从 next_moves 的 meta_data 取（落库点 main_graph 保存时写入）
+            _ts = getattr(n, "created_at", None)
+            if _ts is not None:
+                step["created_at"] = _ts.isoformat() if hasattr(_ts, "isoformat") else str(_ts)
             if n.node_type == "next_moves" and n.action:
                 step["action"] = n.action
             if n.node_type == "next_moves" and n.params:
                 step["params"] = n.params
+            if n.node_type == "next_moves":
+                _md = getattr(n, "meta_data", None) or {}
+                if isinstance(_md, dict):
+                    if _md.get("duration_ms") is not None:
+                        step["duration_ms"] = _md["duration_ms"]
+                    if _md.get("error_code"):
+                        step["error_code"] = _md["error_code"]
             if n.node_type == "observation":
                 if n.success is not None:
                     step["success"] = n.success

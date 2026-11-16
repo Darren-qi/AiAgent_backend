@@ -467,6 +467,13 @@ class ProgressiveSkillLoader:
             logger.warning(
                 "[ProgressiveLoader] 守卫拒绝 skill=%s code=%s: %s",
                 name, deny["error_code"], deny["message"])
+            try:
+                from app.agent.trace import params_digest, run_log
+                run_log("guard_deny", tool=name,
+                        error_code=deny["error_code"],
+                        params=params_digest(params))
+            except Exception:  # noqa: BLE001 - 打点不阻塞
+                pass
             return SkillResult(
                 success=False,
                 error=deny["message"],
@@ -474,11 +481,25 @@ class ProgressiveSkillLoader:
             )
 
         def _done(result: "SkillResult") -> "SkillResult":
-            """统一出口：补 error_code + guard.finish（熔断计数/审计）。"""
+            """统一出口：补 error_code + guard.finish（熔断计数/审计）
+            + duration 挂 metadata（阶段六落库）+ JSONL tool_call 事件。"""
             result = _stamp_error_code(result)
-            tool_guard.finish(
+            ev = tool_guard.finish(
                 name, ok=result.success, detail=result.error,
                 error_code=result.error_code)
+            try:
+                if ev and ev.get("duration_ms") is not None:
+                    result.metadata = {
+                        **(result.metadata or {}),
+                        "duration_ms": ev["duration_ms"],
+                    }
+                from app.agent.trace import params_digest, run_log
+                run_log("tool_call", tool=name, ok=result.success,
+                        error_code=result.error_code,
+                        duration_ms=(ev or {}).get("duration_ms"),
+                        params=params_digest(params))
+            except Exception:  # noqa: BLE001 - 打点不阻塞
+                pass
             return result
 
         # 阶段五：瞬态重试——按 registry retry 元数据（幂等 read/list 类

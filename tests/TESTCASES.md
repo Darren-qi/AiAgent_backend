@@ -136,6 +136,7 @@
 | TC-S11-01 | 模型配置与请求体构造正确 | test_llm（create_config/create_request） | ✅ |
 | TC-S11-02 | 预算检查、用量记录、状态查询 | test_llm（check_budget/record_usage/get_status） | ✅ |
 | TC-S11-03 | 路由器与可用模型/策略枚举 | test_llm（create_router/available_models/strategies） | ✅ |
+| TC-S11-04 | 阶段六·LLM 打点：factory.chat 每次调用产出 loguru `[LLM]` 行（model/latency_ms/prompt_tokens/completion_tokens/cost，进 app.log）+ JSONL `llm_call` 事件（含 request_id） | test_llm_trace（2 例） | ✅ |
 
 ## S12 API 接口
 
@@ -147,6 +148,7 @@
 | TC-S12-04 | 会话创建、记忆读取接口可用 | test_endpoints（create_conversation/get_memory） | ✅ |
 | TC-S12-05 | ⏸ 注册/登录全量/帖子/用户管理 27 条：缺 client fixture 且会写真实库，启用前先建隔离测试库 | test_auth/test_posts/test_users | ⏸ |
 | TC-S12-06 | ⏸ 登录成功(有账号)用例：依赖真实库已有 testuser（本地碰巧有=环境假绿） | test_endpoints（TestAuthEndpoint 2条） | ⏸ |
+| TC-S12-07 | 阶段六·回放补字段：get-session 过程卡 next_moves 带 duration_ms/error_code、全步骤带 created_at（meta_data 组装链路已落库） | 手动核对接口返回（组装逻辑在 agent.py 闭包内，无单测面） | 🟡 |
 
 ## S13 周边服务（通知/存储/社交/用户）
 
@@ -169,6 +171,7 @@
 | TC-S14-06 | 阶段二·查询 API：get_by_stage（规划期不含 sandbox/notification）、get_by_risk（exec={sandbox}）、get_guard_meta 切片（未注册 None） | test_tool_registry::test_registry_query_apis | ✅ |
 | TC-S14-07 | 阶段四·动态白名单：stage="plan" 只读集注入（验收：规划期 prompt 不出现 file_operations/sandbox/http_client 等 write/exec/network 类）；stage=None/execute 全量 9/9 不回归；tool_deny_risks 黑名单（network,exec）生效且默认空不回归；planner 调用点透传 | test_skill_whitelist（plan_stage/execute_default/deny_risks/pure/planner_pass 5 例） | ✅ |
 | TC-S14-08 | 阶段四·prompt 同步试点：file_operations 参数段从 frontmatter 渲染（全量参数键+usage 规则"不能是 Python 代码/≤4文件"+operation 枚举），替代 prompt 硬编码段防双份漂移 | test_skill_whitelist::test_render_skill_params_from_frontmatter | ✅ |
+| TC-S14-09 | 阶段六·Trace 最小闭环：run 日志（无 session 禁用、路径 `{session}_{ts}.jsonl`、request_id 贯穿、params 只存摘要不存全文）；guard.finish 返回 duration 事件；loader 出口 duration 挂 SkillResult.metadata + JSONL `tool_call`/`guard_deny` 事件 | test_trace（7 例） | ✅ |
 
 ## S15 真实 LLM 任务端到端（走完整 ReAct）
 

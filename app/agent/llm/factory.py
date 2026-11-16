@@ -192,7 +192,11 @@ class LLMFactory:
 
         async def _do_chat():
             nonlocal provider, request
+            import time as _time
+            _t0 = _time.perf_counter()
             result = await provider.chat(request)
+            _latency_ms = round((_time.perf_counter() - _t0) * 1000, 1)
+            pi = co = 0
             try:
                 # P1（2026-11-14）：真实 usage → 校准估算 + 本 turn 计费累计。
                 # 追踪任何一步失败都只跳过追踪，绝不影响调用返回。
@@ -220,6 +224,28 @@ class LLMFactory:
                                     "cost": float(result.cost or 0.0)})
             except Exception:  # noqa: BLE001 - 用量追踪永不阻塞 LLM 调用
                 pass
+
+            # 阶段六：LLM 层打点——app.log（loguru→文件，含 model/latency）
+            # + JSONL run 日志；任何失败只降级不阻塞调用返回。
+            try:
+                from app.utils.logger import get_logger
+                from app.agent.trace import run_log
+                _model = (getattr(result, "model", None)
+                          or (selected_model.name if selected_model else "-"))
+                _provider = str(getattr(result, "provider", None)
+                                or getattr(selected_model, "provider", ""))
+                get_logger().info(
+                    f"[LLM] model={_model} provider={_provider} "
+                    f"latency_ms={_latency_ms} prompt_tokens={pi} "
+                    f"completion_tokens={co} "
+                    f"cost={float(result.cost or 0.0):.6f}")
+                run_log("llm_call", model=_model, provider=_provider,
+                        latency_ms=_latency_ms, prompt_tokens=pi,
+                        completion_tokens=co,
+                        cost=float(result.cost or 0.0))
+            except Exception:  # noqa: BLE001 - 打点永不阻塞
+                pass
+
             await budget_manager.record_usage(result.cost)
             return result
 

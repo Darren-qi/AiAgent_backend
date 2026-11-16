@@ -613,6 +613,13 @@ class AgentGraph:
         except Exception as _ue:  # noqa: BLE001 - 追踪失败不阻塞执行
             logger.debug("usage scope 初始化失败（降级无累计）: %s", _ue)
 
+        # 阶段六：本 turn 的 JSONL run 日志（logs/runs/{session_id}_{ts}.jsonl）
+        try:
+            from app.agent.trace import configure_run_log
+            configure_run_log(session_id)
+        except Exception as _te:  # noqa: BLE001 - 打点降级不阻塞
+            logger.debug("run 日志初始化失败（降级不落盘）: %s", _te)
+
         # 用户级 DeepSeek key（2026-11-14）：本 turn 按 session → user 装载
         # 用户自己的 key（contextvar）；未填 / 查询失败一律回落系统 key，
         # 绝不阻塞执行。
@@ -1602,6 +1609,13 @@ class AgentGraph:
                     last_execution_result if execution_result.get("success") else last_error
                 )
 
+            # 阶段六：duration_ms/error_code/request_id 随 meta_data 落库，
+            # 回放（get-session steps）与 DB 排障从此可读
+            try:
+                from app.middleware.request_id import get_request_id
+                _rid = get_request_id() or None
+            except Exception:  # noqa: BLE001
+                _rid = None
             await self._save_execution_node(
                 todo_id=todo_id,
                 node_type="next_moves",
@@ -1611,7 +1625,12 @@ class AgentGraph:
                 result=execution_result,
                 iteration=iteration,
                 success=execution_result.get("success", False),
-                meta_data={"loop_index": loop_idx}
+                meta_data={
+                    "loop_index": loop_idx,
+                    "duration_ms": execution_result.get("duration_ms"),
+                    "error_code": execution_result.get("error_code"),
+                    "request_id": _rid,
+                }
             )
 
             # === Observation 阶段 ===
@@ -2041,12 +2060,17 @@ class AgentGraph:
                 tool_guard.finish(
                     step.get("action") or "", ok=False,
                     detail=f"timeout {timeout}s", error_code="TIMEOUT")
+                from app.agent.trace import params_digest, run_log
+                run_log("tool_call", tool=step.get("action"), ok=False,
+                        error_code="TIMEOUT", duration_ms=timeout * 1000,
+                        params=params_digest(step.get("params")))
             except Exception as _ge:  # noqa: BLE001 - 守卫回执失败不阻塞
                 logger.warning("[AgentGraph] guard.finish 超时回执失败: %s", _ge)
             return {
                 "success": False,
                 "error": f"步骤执行超时: {timeout}秒",
                 "error_code": "TIMEOUT",
+                "duration_ms": timeout * 1000,
                 "action": step.get("action"),
                 "step": step.get("step"),
             }
@@ -2152,6 +2176,8 @@ class AgentGraph:
                 "error": result.error,
                 # getattr 防御：测试 spy/旧 registry 返回对象可能无该字段
                 "error_code": getattr(result, "error_code", None),
+                "duration_ms": (result.metadata or {}).get("duration_ms")
+                if isinstance(getattr(result, "metadata", None), dict) else None,
                 "action": friendly_action or action,
             }
         except Exception as e:
