@@ -126,6 +126,9 @@ class ExecutionStateManager:
         self.iteration: int = 0
         self.scratchpad: str = ""
         self.errors: List[Dict[str, Any]] = []
+        # 失败收尾断点标记（2026-11-14 用户定：失败也支持断点继续）：
+        # 非空=上一轮以失败收尾，随状态落库，下一轮由 cap_restore 判续/弃
+        self.failed_error: str = ""
         self.last_action_result: Optional[ActionResult] = None
         self._is_running: Optional[Callable[[], bool]] = None
         self._pg_saver = None
@@ -324,6 +327,7 @@ class ExecutionStateManager:
                 "current_todo_index": self.current_todo_index,
                 "iteration": self.iteration,
                 "errors": self.errors,
+                "failed_error": self.failed_error,
                 "saved_at": time.time(),
             }
             saved_id = await saver.save_working(
@@ -378,6 +382,8 @@ class ExecutionStateManager:
 
             # 恢复错误记录
             self.errors = state_data.get("errors", [])
+            # 恢复失败收尾标记（旧状态行无此键=空，向后兼容）
+            self.failed_error = state_data.get("failed_error", "") or ""
 
             logger.info(
                 f"[ExecutionStateManager] 状态已恢复: "
@@ -405,6 +411,25 @@ class ExecutionStateManager:
         except Exception as e:
             logger.warning(f"[ExecutionStateManager] 清除状态失败: {e}")
             return False
+
+    def note_failure(self, error: str):
+        """失败收尾记断点（不抹未完成事项，供下一轮断点继续）。
+
+        保留 todos/进度，把失败原因写入 failed_error 与 scratchpad；
+        下一轮 load_state 后由 roundcap_judge.cap_restore 的 judge_continue
+        决定续跑（恢复未完成待办）还是弃用（用户开了新任务）。
+        """
+        self.failed_error = str(error or "")
+        self._append_scratchpad(f"【任务失败收尾】{self.failed_error[:300]}\n")
+
+    def prepare_resume(self):
+        """断点续跑前复位：FAILED/IN_PROGRESS 待办回 pending（恢复即重试），
+        并消费掉失败标记（已判定为继续）。"""
+        for t in self.todos:
+            if t.status in (TodoStatus.FAILED, TodoStatus.IN_PROGRESS):
+                t.status = TodoStatus.PENDING
+                t.error = ""
+        self.failed_error = ""
 
     def get_recovery_info(self) -> Dict[str, Any]:
         """获取恢复信息摘要（用于前端显示）"""

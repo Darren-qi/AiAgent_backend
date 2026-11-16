@@ -151,6 +151,14 @@ class User(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
         comment="密码重置令牌过期时间",
     )
 
+    # 用户自己的 DeepSeek API Key（2026-11-14）：填写后该用户的 LLM 调用
+    # 走用户自己的 key 计费；NULL = 使用系统 key。接口只回掩码不回全文。
+    deepseek_api_key: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="用户DeepSeek API Key",
+    )
+
     # =========================================
     # 角色和状态
     # =========================================

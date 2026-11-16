@@ -43,6 +43,14 @@ class ModelRouter:
         for provider in ModelProvider:
             api_key = os.environ.get(f"{provider.value.upper()}_API_KEY")
             if not api_key:
+                # 用户级 DeepSeek key（2026-11-14）：系统没配 DEEPSEEK_API_KEY
+                # 但本 turn 用户填了自己的 key → 仍应选到 DeepSeek 模型。
+                # 只对 DeepSeek 回落（用户 key 是 deepseek 专用），lazy import
+                # 避免 factory ↔ router 循环。
+                if provider is ModelProvider.DEEPSEEK:
+                    from app.agent.llm.user_api_key import get_user_api_key
+                    api_key = get_user_api_key()
+            if not api_key:
                 continue
 
             model_name = os.environ.get(f"{provider.value.upper()}_MODEL", "")

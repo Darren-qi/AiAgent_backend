@@ -338,6 +338,34 @@ requirements.txt::Flask>=2.0.0
         project_dir = self.skill._tasks_dir / project_name
         assert (project_dir / "backend" / "keep.py").exists()
 
+    @pytest.mark.asyncio
+    async def test_edit_batch_files_array(self):
+        """edit 支持 files 数组批量（TC-S16-03 生产回归：2026-11-14 01:39
+        两次"缺少 path"——模型把 files 批量推广到 edit 且用 old_string 键）"""
+        project_folder = f"edit_batch_test_{int(time.time())}"
+        create_result = await self.skill.execute(
+            operation="create",
+            path=project_folder,
+            content="a.py::A = 1\nb.py::B = 2",
+            session_id=self.test_session_id,
+        )
+        assert create_result.success
+        project_name = create_result.data.get("project_name")
+
+        batch = await self.skill.execute(
+            operation="edit",
+            files=[
+                {"path": "a.py", "old_string": "A = 1", "new_string": "A = 111"},
+                {"path": "b.py", "old_string": "B = 2", "new_string": "B = 222"},
+            ],
+            task_path=project_name,
+            session_id=self.test_session_id,
+        )
+        assert batch.success, f"批量编辑失败: {batch.error}"
+        project_dir = self.skill._tasks_dir / project_name
+        assert "A = 111" in (project_dir / "a.py").read_text(), "a.py 未被批量编辑"
+        assert "B = 222" in (project_dir / "b.py").read_text(), "b.py 未被批量编辑"
+
     async def test_delete_batch_files_and_paths(self):
         """delete 支持 files=[{path}] 与 paths=[...] 批量（TC-S16-01 取证修复）。"""
         project_folder = f"del_batch_test_{int(time.time())}"

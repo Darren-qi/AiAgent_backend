@@ -6,6 +6,20 @@ from typing import Generator, AsyncGenerator
 from unittest.mock import MagicMock, AsyncMock
 
 
+@pytest.fixture(autouse=True)
+def _calibration_isolation():
+    """每个测试前后重置 token 校准比例（P1 2026-11-14）。
+
+    factory._do_chat 现在会用真实/ mock 的 prompt_tokens 调 calibrate()，
+    全局 _calibration_ratio 会被测试里的 mock usage 改脏，
+    泄漏到其他测试（test_context 预算断言因此漂移）。
+    """
+    from app.agent.context.budget import reset_calibration
+    reset_calibration()
+    yield
+    reset_calibration()
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """创建事件循环"""

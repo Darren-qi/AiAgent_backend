@@ -46,13 +46,14 @@ def test_exact_subdir_path_still_checked(tmp_path: Path):
 
 
 def test_miss_message_puts_task_dir_first():
-    """观察缺件文案：句首声明"待办未完成（非本步操作失败）"+带任务目录查找根
-    （2026-11-13 用户反馈：原文案紧跟在 read 行后、前半句"文件不存在"看起来
-    像读取失败；实际是完成判定在报待办缺件，read 本身是成功的）。"""
+    """观察缺件文案（2026-11-14 第三次迭代）：句首说本步状态 + 缺件问题，
+    不得以待办状态断言开头（用户：过程里总写"待办未完成"易被误读成本步失败）；
+    仍带任务目录查找根（2026-11-13：相对路径易被误读成"没带任务目录"）。"""
     from pathlib import Path as _P
     src = (_P(__file__).parent.parent.parent / "app" / "agent" / "graphs" / "main_graph.py").read_text(encoding="utf-8")
-    assert "本待办未完成（本步操作已成功，非操作失败）：对照任务目录 {_tp} 按相对路径检查" in src, \
-        "缺件文案句首必须先声明待办未完成且非本步失败，并带任务目录查找根"
+    assert "本步操作已成功，但" in src and "对照任务目录 {_tp} 按相对路径检查，以下承诺产出文件尚未创建: " in src, \
+        "缺件文案句首必须是本步状态+缺件问题，且带任务目录查找根"
+    assert "本待办未完成" not in src, "缺件文案不得再写待办状态断言（2026-11-14：歧义）"
     assert "以下文件在本待办过程中提到但任务目录中不存在" not in src, "旧文案应移除"
 
 

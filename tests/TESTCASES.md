@@ -60,7 +60,7 @@
 | TC-S4-06 | 归类移动后旧路径提及（app/x.py 实在 backend/app/）→ 不误报"不存在" | test_promised_files（slashed/exact 两条） | ✅ |
 | TC-S4-07 | 提示词规则不丢：批量移动/先list再访问/失败重试/收尾核对（规则10-12） | test_thought_rules::test_thought_rules_present | ✅ |
 | TC-S4-08 | 路径带任务目录名前缀（task/… 或 tasks/task/…）→ 剥前缀在任务目录内解析，不嵌套出 task/task/…、不落 tasks 根 | test_file_operations::test_path_with_task_dir_prefix_resolves_inside_task | ✅ |
-| TC-S4-09 | 缺件观察句首先声明"待办未完成（本步操作已成功，非操作失败）"+带任务目录查找根，不被误读成本步读取失败 | test_promised_files::test_miss_message_puts_task_dir_first | ✅ |
+| TC-S4-09 | 缺件观察句首=本步状态+缺件问题（"本步操作已成功，但…尚未创建"，2026-11-14 第三次迭代），不写"待办未完成"状态断言，仍带任务目录查找根 | test_promised_files::test_miss_message_puts_task_dir_first | ✅ |
 | TC-S7-06 | 写后读回硬跳过：上一动作 write+read 文件⊆刚写列表→不执行并给跳过反馈；读别的文件、edit 后依赖读不受影响（3例） | test_readback_guard | ✅ |
 | TC-S7-07 | 重复读硬跳过+退轮：同 turn 同文件第2次 read→跳过并强指令动手（4例，含 turn 重置后首读不误伤、循环层退轮源码断言）；现场=第三轮 5 轮全 read 烧光判失败 | test_duplicate_read_guard | ✅ |
 
@@ -175,6 +175,8 @@
 |---|---|---|---|
 | TC-S16-01 | 🟡 手动：轮1「创建一个Flask博客项目」→ 中间流程 0 次工具执行失败；轮2「将前端改为vue3框架，后端改为FastAPI框架，并将现有文件归类到前后端目录」→ 正确归类、根目录恰好只剩前后端两个子目录、前端有 .vue、后端有 fastapi 证据 | scripts/smoke/fullstack_flask_e2e.py | 🟡 |
 | TC-S16-02 | 🟡 手动：三轮连贯对话，第3轮是修复类任务（给已有项目挂组件/补路由）→ 待办成功收尾，过程区不出现连续重复读导致的"5轮全read达到最大循环次数"空转（生产 2026-11-14 00:12 现场，session_1794585775850；配套自动化=TC-S7-07） | 手动复现：连续3轮发消息，第3轮让系统改已有文件，核对无重复读空转 | 🟡 |
+| TC-S16-03 | 🟡 手动：任务失败收尾后发「继续」→ 期望恢复上轮未完成待办继续执行且全程0次工具执行失败；现场（生产 2026-11-14 01:39，session_1794585775850）：失败收尾 clear_state 清掉未完成事项→生成字面量待办"继续"→edit 用 files[] 批量形态连续2次报"缺少 path 参数"（01:39:12/01:39:32）→0文件改动却标✅完成。**已修（2026-11-14）**：①失败收尾不再 clear_state，改 note_failure+failed_error 落库，下一轮 cap_restore 由 judge_continue 判续/弃（继续→复位失败待办续跑；新任务→丢弃；截断续跑原行为不变）②edit 支持 files[] 批量且兼容 old_string/new_string 键 ③失败/验收拒绝/异常三处收尾统一记断点 ④先落库再发终态事件（e2e 首跑实测：前端收到 complete/error 即断开→本任务被 cancel→后置 await 被打断→断点没清+任务误标"任务被取消"；已按 agent.py「先落库再通知前端」原则把4处终态事件重排为先持久化再 emit） | tests/test_agent/test_resume_checkpoint.py（断点落库取回/续/弃/截断回归/直通 共10例）+ test_file_operations::test_edit_batch_files_array（原 xfail 已转正）+ scripts/smoke/resume_e2e.py（真实两轮 e2e：建任务→播种失败断点→发「继续」→断言 resumed 事件/edit files[] 执行/断点消费/任务 completed/0 缺参） | ✅ 2026-11-14 本地 e2e PASS |
+| TC-S16-04 | ✅ 单测：过程区连续报"工具执行失败: 缺少 path 参数"（生产 2026-11-14 23:00:59-23:06:56，session_1794668306070 共5次，第5次换 files[] 才成功）。**根因取证**：planning 原文（execution_nodes id4672/4788/4792/4796）显示模型把大 .vue 文件内容内联进一条参数 JSON，生成结构崩坏——参数 keys 变成代码碎片（name/component/props/…）、只剩尾部 operation/task_path、没有 path；解析器 _extract_json 把它当合法 dict 放行（planner.py:919-996）→执行必报缺 path。**深层原因**：SKILL.md 正文传参须知（含"单次批量≤4文件/≤6000字，超出会被输出上限截断成残缺JSON"的同款警告，file_operations/SKILL.md:98）从未进 prompt——平时只发名称+一句话+tags（progressive_loader.py:488-499），出错 JIT 也只给 frontmatter schema（无 files/edits、无批量规模）。**已修（2026-11-14 A+B 一起）**：A=frontmatter parameters 补 files/edits/paths/old_text/new_text/replace_all+新增 operation_targets 契约与 usage 调用须知，出错 JIT 注入"全量 schema+调用须知"（渐进第三级），三处规划 prompt 补"单次≤4文件/≤6000字"警告；B=_parse_planning_response 标 params_invalid 不放行 + progressive_loader.execute 执行前按 operation_targets 契约拦截（缺目标参数→结构化错误走 correction 回注 schema/须知），未声明契约的 skill 不拦 | tests/test_agent/test_planner_params_guard.py 6 例（坏参数标记+reason、正常/list/批量/注入键不误伤、loader.execute 拦截、hint 含批量参数+调用须知+≤4文件）+ tests/ 全量 188 passed | ✅ 2026-11-14 本地 188 passed |
 
 ## S17 界面过程区展示（折叠行表头/摘要不重复、失败才露根因）
 

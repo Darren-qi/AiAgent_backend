@@ -81,3 +81,6 @@ class ChatRequest:
     tools: Optional[List[Dict[str, Any]]] = None
     user: Optional[str] = None
     timeout: Optional[float] = 60.0  # 请求超时时间（秒）
+    # 用户级 API Key（2026-11-14）：非空时 provider 用它替代系统 key 计费。
+    # 由 factory.chat 在 DeepSeek 选型且本 turn 用户填了自己 key 时注入。
+    api_key: Optional[str] = None

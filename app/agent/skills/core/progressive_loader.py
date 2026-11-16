@@ -30,6 +30,8 @@ class SkillMetadata:
     author: str = "system"
     tags: List[str] = field(default_factory=list)
     parameters: Dict[str, Any] = field(default_factory=dict)  # JSON Schema
+    operation_targets: Dict[str, List[str]] = field(default_factory=dict)  # 操作→目标参数契约
+    usage: str = ""  # 出错 JIT 注入的调用须知（渐进第三级）
     file_path: Path = field(default=None)
     skill_dir: Path = field(default=None)
 
@@ -41,6 +43,8 @@ class SkillMetadata:
             "author": self.author,
             "tags": self.tags,
             "parameters": self.parameters,
+            "operation_targets": self.operation_targets,
+            "usage": self.usage,
         }
 
     def matches_query(self, query: str) -> float:
@@ -247,6 +251,8 @@ class ProgressiveSkillLoader:
             author=data.get("author", "system"),
             tags=data.get("tags", []),
             parameters=data.get("parameters", {}),
+            operation_targets=data.get("operation_targets") or {},
+            usage=data.get("usage") or "",
             file_path=skill_md,
             skill_dir=skill_dir,
         )
@@ -371,6 +377,17 @@ class ProgressiveSkillLoader:
             SkillResult 对象
         """
         from app.agent.skills.core.base_skill import SkillResult
+
+        # 参数结构崩坏防线（TC-S16-04，2026-11-14 生产取证）：按 skill
+        # frontmatter 的 operation_targets 契约校验，结构崩坏的 params
+        # 不执行——返回结构化错误走 observe correction，回注全量 schema
+        # +调用须知，让模型按正确形状重发（渐进第二/三级在错误时注入）。
+        _prob = validate_params_structure(name, params)
+        if _prob:
+            logger.warning(
+                "[ProgressiveLoader] 拦截参数结构异常 skill=%s: %s", name, _prob)
+            return SkillResult(
+                success=False, error=f"{_prob}（参数结构异常，未执行）")
 
         # 优先使用注册的 executor
         if name in self._executors:
@@ -497,6 +514,42 @@ class ProgressiveSkillLoader:
             tags_str = f" [{','.join(metadata.tags)}]" if metadata.tags else ""
             lines.append(f"- {metadata.name}: {metadata.description}{tags_str}")
         return "\n".join(lines)
+
+
+def validate_params_structure(name: str, params: Any) -> Optional[str]:
+    """参数结构崩坏防线（TC-S16-04，2026-11-14 生产取证）。
+
+    现场：模型把大文件内容内联进参数 JSON，输出结构崩坏——解析出的
+    params 键变成代码碎片、缺该操作的目标参数，执行必报"缺少 path 参数"
+    连环失败。按 skill frontmatter 声明的 ``operation_targets`` 契约校验
+    （契约写在 skill 文档里，代码不逐 skill 硬编码）；未声明契约的
+    skill 一律不拦，避免误伤。
+
+    Returns:
+        问题描述（放行时返回 None）
+    """
+    if not isinstance(params, dict):
+        return f"params 不是 JSON 对象（收到 {type(params).__name__}）"
+    if not params:
+        return None
+    try:
+        meta = get_loader().get_metadata(name)
+    except Exception:  # noqa: BLE001 - 索引不可用时不阻塞执行
+        return None
+    if not meta or not meta.operation_targets:
+        return None
+    op = str(params.get("operation") or "").strip().lower()
+    if not op or op not in meta.operation_targets:
+        return None
+    wanted = meta.operation_targets[op] or []
+    if wanted and not any(k in params for k in wanted):
+        return (
+            f"operation={op} 缺少目标参数（{name} 需要 "
+            f"{'/'.join(wanted)} 之一），实际参数键为 "
+            f"{sorted(str(k) for k in params)[:8]}"
+            "——参数结构疑似崩坏，禁止执行"
+        )
+    return None
 
 
 # 全局加载器实例

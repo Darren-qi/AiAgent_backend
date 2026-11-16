@@ -7,7 +7,9 @@ import logging
 from typing import Dict, Any, List, Optional
 
 from app.agent.llm.factory import LLMFactory
-from app.agent.skills.core.progressive_loader import get_loader, ProgressiveSkillLoader
+from app.agent.skills.core.progressive_loader import (
+    get_loader, ProgressiveSkillLoader, validate_params_structure,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +101,7 @@ title: {title}
 2. 考虑需要的资源和步骤
 3. 预判可能的困难
 4. 简明输出你的思考
-5. 待办涉及多个文件时：**互不依赖的新建文件用一次 write 的 files 数组批量并发落盘**（`{{"operation":"write","files":[{{"path":"a.py","content":"..."}},{{"path":"b.py","content":"..."}}]}}`，一次写完缺失清单里的全部文件，子目录自动创建）；只有文件间存在依赖（需先读/先建才能写）或需逐个核对内容时才逐轮推进。禁止重复生成已存在的文件
+5. 待办涉及多个文件时：**互不依赖的新建文件用一次 write 的 files 数组批量并发落盘**（`{{"operation":"write","files":[{{"path":"a.py","content":"..."}},{{"path":"b.py","content":"..."}}]}}`，一次写完缺失清单里的全部文件，子目录自动创建）；只有文件间存在依赖（需先读/先建才能写）或需逐个核对内容时才逐轮推进。禁止重复生成已存在的文件；批量单次≤4文件、总内容≤6000字，超出拆多次调用——把超长内容塞进单个参数会被输出上限截断成残缺 JSON
 6. 改动已有文件前先在思考里做前置判断：这处改动是局部（增删改个别几处）还是重写级？局部 → 用 edit（old_text→new_text 只替换改动处，其余内容零风险）；重写级/大幅重构或新建文件 → 才用 write 全量覆盖（必须基于完整内容，长文件先读完所有分页再覆盖）。判断幅度由你根据需求权衡，把结论写进思考再动手
 7. 梳理/定位代码先用 search_files 关键词搜索（拿到 文件:行号），再用 read 的 offset/limit 精读命中点附近；禁止整读大文件、禁止反复 list 目录漫游
 8. 信息足够就立即推进产出；当历史上下文出现"最后一轮/强制交付"或观察提示该产出交付物时，本轮必须产出，不要再收集信息
@@ -154,7 +156,7 @@ code_generator 会自动写入文件，参数格式：
 - `operation`: create/write/read/list/delete/edit/move
 - `path`: 文件路径（必须用 path！不是 filename）
 - `content`: 文件内容（write 时需要）
-- `files`: 批量写入数组（write 时可替代 path+content）：[{"path": "a.py", "content": "..."}, {"path": "b.py", "content": "..."}]——互不依赖的新建文件一次并发写完，骨架类禁止逐文件多轮
+- `files`: 批量写入数组（write 时可替代 path+content）：[{"path": "a.py", "content": "..."}, {"path": "b.py", "content": "..."}]——互不依赖的新建文件一次并发写完，骨架类禁止逐文件多轮；单次≤4文件、总内容≤6000字，超出拆多次调用（防输出截断成残缺 JSON）
 - `dest`: move 的目标路径（move 时需要；移动类任务禁止用 write 在目标处重建副本）
 - `old_text`/`new_text`/`replace_all`: edit 局部替换（old_text 必须与文件逐字一致且唯一；命中多处才传 replace_all=true）
 - `offset`/`limit`: read 分页（默认读前 200 行；大文件按需指定 offset 续读）
@@ -247,6 +249,9 @@ action: {action}
    原文件仍留在原处 = 未完成，reason 点名仍留在原位置的文件。
 7. **状态必须与原因自洽**：本轮某个动作成功执行 ≠ 待办完成。判"已完成"前对照当前待办
    标题的全部目标逐项核对；只要原因里写明还有任何未达成的内容，完成状态就不得标"已完成"。
+8. **reason 只写本步结果与问题**：说明本轮动作的结果与具体缺口/报错（做了什么、还缺
+   什么文件、报错原文），不要以"待办未完成"这类状态断言开头——状态由完成状态行
+   单独表达，reason 重复状态会让读者误以为本步操作失败。
 
 输出格式：
 完成状态: [已完成 / 部分完成 / 未完成]
@@ -686,8 +691,13 @@ class Planner:
                     f"{(v or {}).get('description', '')}".rstrip(": ")
                     for k, v in props.items()
                 ]
-                return (f"\n\n**{skill_name} 全量参数 schema**"
+                hint = (f"\n\n**{skill_name} 全量参数 schema**"
                         f"（按此修正，必填项一个都不能少）:\n" + "\n".join(lines))
+                usage = str(s.get("usage") or "").strip()
+                if usage:
+                    # 渐进第三级：选定工具出错时随 schema 注入具体使用方法
+                    hint += f"\n\n**{skill_name} 调用须知**:\n{usage}"
+                return hint
         except Exception as e:  # noqa: BLE001 - schema 获取失败不阻塞规划
             logger.warning(f"[Planner] 获取 skill schema 失败: {e}")
         return ""
@@ -773,6 +783,7 @@ title: {todo.get("title", "")}
    - file_operations: 必须包含 path、operation
      - path 必须是合法的文件路径，例如: "app.py", "routes/__init__.py", "templates/index.html"
      - **path 不能包含 Python 代码**，不能是 "@app.route('/')" 这样的内容
+     - 目标参数按 operation 必选其一：write/read→path 或 files[]；edit→path 或 edits[]；delete→path/files[]/paths[]；move→path 或 files[]——批量单次≤4文件、总内容≤6000字，超出拆多次调用（防输出截断成残缺 JSON）
    - http_client: 必须包含 url
    - code_generator: 必须包含 requirements/language
 3. 如果上一步失败，必须修正对应的参数
@@ -910,6 +921,13 @@ title: {todo.get("title", "")}
                     for p in re.split(r'[,，、;；\s]+', raw)
                     if p.strip()
                 ]
+
+        # 参数结构崩坏防线（TC-S16-04）：缺目标参数的计划标记不放行，
+        # 执行层 loader.execute 同样拦截并回注全量 schema+调用须知
+        _prob = validate_params_structure(result["action"], result["params"])
+        if _prob:
+            result["params_invalid"] = True
+            result["params_invalid_reason"] = _prob
 
         return result
 

@@ -426,10 +426,31 @@ class FileOperationsSkill(BaseSkill):
                 result.metadata["friendly_action"] = friendly_action
                 result.metadata["operation"] = "edit_file"
                 return result
+            # files 批量（2026-11-14 TC-S16-03 生产取证：模型把 write/read/
+            # delete/move 的 files 批量自然推广到 edit，发
+            # files:[{path,old_string,new_string}] → 恒报"缺少 path 参数"
+            # 连烧2轮）。files 语义=逐文件，每项必须带 path；替换键与 edits 同构。
+            _files_param = kwargs.get("files")
+            if isinstance(_files_param, list) and _files_param:
+                result = await self._edit_files_batch(
+                    _files_param, file_path, encoding, session_id, task_path,
+                )
+                result.metadata = result.metadata or {}
+                result.metadata["friendly_action"] = friendly_action
+                result.metadata["operation"] = "edit_file"
+                return result
             if not file_path:
-                return SkillResult(success=False, error="缺少 path 参数")
+                return SkillResult(
+                    success=False,
+                    error="缺少 path 参数（单条: path+old_text/new_text; "
+                          "批量: files=[{path,old_string,new_string}] "
+                          "或 edits=[{old,new}]）")
             result = await self._edit_file(
-                file_path, kwargs.get("old_text"), kwargs.get("new_text"),
+                file_path,
+                kwargs.get("old_text") if kwargs.get("old_text") is not None
+                else kwargs.get("old_string"),
+                kwargs.get("new_text") if kwargs.get("new_text") is not None
+                else kwargs.get("new_string"),
                 kwargs.get("replace_all", False), encoding, session_id, task_path,
             )
             result.metadata = result.metadata or {}
@@ -979,7 +1000,9 @@ class FileOperationsSkill(BaseSkill):
 
         2026-11-13 用户测试：模型会把 write 的 files 批量模式自然推广到
         edit（发 edits:[{old,new}]），不支持就报"缺少 old_text"白烧轮次。
-        每项: {path?, old, new, replace_all?}（也兼容 old_text/new_text 键），
+        每项: {path?, old, new, replace_all?}
+        （也兼容 old_text/new_text、old_string/new_string 键——
+        2026-11-14 TC-S16-03：模型对 edit 也自然用 OpenAI 风格 old_string），
         path 缺省用顶层 path。同文件多处按顺序应用（有依赖，不并发）。
         """
         if isinstance(edits, str):
@@ -997,8 +1020,16 @@ class FileOperationsSkill(BaseSkill):
                 failed.append(f"edits[{i}]: 必须是对象")
                 continue
             p = str(e.get("path") or default_path or "").strip()
-            old = e.get("old") if e.get("old") is not None else e.get("old_text")
-            new = e.get("new") if e.get("new") is not None else e.get("new_text")
+            old = e.get("old")
+            if old is None:
+                old = e.get("old_text")
+            if old is None:
+                old = e.get("old_string")
+            new = e.get("new")
+            if new is None:
+                new = e.get("new_text")
+            if new is None:
+                new = e.get("new_string")
             if not p or old is None or new is None:
                 failed.append(f"edits[{i}]: 缺少 path/old/new")
                 continue

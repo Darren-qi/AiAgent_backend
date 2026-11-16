@@ -81,6 +81,18 @@ class UserPasswordUpdate(BaseModel):
         return v
 
 
+class UserLLMKeyUpdate(BaseModel):
+    """用户 DeepSeek API Key 更新 Schema（2026-11-14）"""
+    api_key: str = Field(default="", max_length=255, description="DeepSeek API Key；空串表示清除")
+
+
+class LLMKeyStatus(BaseModel):
+    """DeepSeek API Key 状态 Schema（只回掩码，不回全文）"""
+    configured: bool = Field(description="是否已配置")
+    masked: Optional[str] = Field(default=None, description="掩码显示，如 sk-***abcd")
+    error: Optional[str] = Field(default=None, description="保存失败原因（如 Key 无效），成功为 None")
+
+
 # =============================================
 # 用户响应 Schema
 # =============================================

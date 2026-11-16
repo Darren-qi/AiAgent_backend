@@ -38,8 +38,12 @@ def reset_calibration() -> None:
     _calibration_ratio = 1.0
 
 
-def count_tokens(text: str) -> int:
-    """token 计数：tiktoken 优先，缺失时 chars/4 估算（CJK 加权）；按校准比例修正。"""
+def count_tokens(text: str, *, calibrated: bool = True) -> int:
+    """token 计数：tiktoken 优先，缺失时 chars/4 估算（CJK 加权）；按校准比例修正。
+
+    calibrated=False 返回未按 _calibration_ratio 缩放的原始估算，
+    供 calibrate() 做 actual/estimated 比值输入（用已缩放值会自激振荡）。
+    """
     if not text:
         return 0
     raw = 0
@@ -53,7 +57,8 @@ def count_tokens(text: str) -> int:
         cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
         other = len(text) - cjk
         raw = max(1, cjk * 2 // 3 + other // 4)
-    return max(1, int(round(raw * _calibration_ratio)))
+    ratio = _calibration_ratio if calibrated else 1.0
+    return max(1, int(round(raw * ratio)))
 
 
 @dataclass

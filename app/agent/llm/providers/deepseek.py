@@ -25,7 +25,23 @@ class DeepSeekProvider(BaseLLMProvider):
         api_key = os.environ.get(config.api_key_env or "DEEPSEEK_API_KEY", "")
         base_url = os.environ.get(config.base_url_env or "DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
+        self.base_url = base_url
         self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        # 用户级 key 专属 client 缓存（2026-11-14）：key → 复用连接池的 client
+        self._keyed_clients: Dict[str, AsyncOpenAI] = {}
+
+    def _client_for(self, api_key: str) -> AsyncOpenAI:
+        """按用户 key 取（或建）专属 client，进程内按 key 复用。"""
+        client = self._keyed_clients.get(api_key)
+        if client is None:
+            client = AsyncOpenAI(api_key=api_key, base_url=self.base_url)
+            self._keyed_clients[api_key] = client
+        return client
+
+    def _pick_client(self, request: "ChatRequest") -> AsyncOpenAI:
+        """request.api_key 非空（用户自己的 key）→ 用户 client，否则系统 client。"""
+        uk = getattr(request, "api_key", None)
+        return self._client_for(uk) if uk else self.client
 
     async def chat(self, request: ChatRequest) -> LLMResponse:
         """发送聊天请求"""
@@ -50,7 +66,7 @@ class DeepSeekProvider(BaseLLMProvider):
             kwargs["tools"] = request.tools
 
         try:
-            response = await self.client.chat.completions.create(**kwargs)
+            response = await self._pick_client(request).chat.completions.create(**kwargs)
 
             latency_ms = (time.time() - start_time) * 1000
 
@@ -89,7 +105,7 @@ class DeepSeekProvider(BaseLLMProvider):
             kwargs["tools"] = request.tools
 
         async with httpx.AsyncClient() as client:
-            async with self.client.chat.completions.create(**kwargs) as stream:
+            async with self._pick_client(request).chat.completions.create(**kwargs) as stream:
                 async for chunk in stream:
                     if chunk.choices and chunk.choices[0].delta.content:
                         yield chunk.choices[0].delta.content

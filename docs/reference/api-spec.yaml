@@ -1,0 +1,1347 @@
+# RiffCode LangGraph 后端 API 规范
+# 生成依据：app/main.py 路由挂载 + app/api/v1/endpoints/* 逐一路由核对（2026-11-16）
+# 注意：
+#   1. 路径尾斜杠按装饰器原样保留（FastAPI redirect_slashes 会 307 跳转无斜杠形式）；
+#   2. health 前缀+路由双层 → /api/v1/health/health；ws 同理 → /api/v1/ws/ws/{session_id}；
+#   3. notification/social/auth/storage 部分标量参数在 query 而非 body（FastAPI 拆分规则）；
+#   4. app/api/v1/router.py 聚合路由为死代码，本规范只按 main.py 实际挂载生成。
+openapi: 3.0.3
+info:
+  title: RiffCode Agent Backend (LangGraph)
+  description: |
+    RiffCode 智能体后端（LangGraph 版，端口 8000）。
+    核心能力：自然语言任务 → 意图识别 → 规划/执行/重规划循环 → 技能读写文件 → SSE 流式回传。
+    认证：`Authorization: Bearer <access_token>`（登录获取）。
+    完整事件表与错误码见同目录 `error-codes.md` 与本文 SSE 章节。
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:8000
+    description: 本地开发
+tags:
+  - name: Agent
+    description: 智能体执行、会话与文件（核心）
+  - name: Auth
+    description: 注册/登录/令牌
+  - name: Users
+    description: 用户与管理员
+  - name: Posts
+    description: 文章
+  - name: Session
+    description: 内存会话（历史遗留，agent 域请用 /agent 的会话接口）
+  - name: Storage
+    description: 对象存储
+  - name: Social
+    description: 社交渠道发送
+  - name: Notification
+    description: 通知
+  - name: Budget
+    description: 预算
+  - name: Health
+    description: 健康检查
+  - name: WebSocket
+    description: WebSocket 执行通道
+  - name: 系统
+    description: 根级系统端点
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ===================== 系统 =====================
+  /:
+    get:
+      tags: [系统]
+      security: []
+      summary: 根路径信息
+      responses:
+        '200':
+          description: 应用信息
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+                  version: { type: string }
+                  docs: { type: string, example: /docs }
+  /health:
+    get:
+      tags: [系统]
+      security: []
+      summary: 健康检查（根级）
+      responses:
+        '200':
+          description: 健康
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: healthy }
+                  app: { type: string }
+                  version: { type: string }
+
+  # ===================== Auth =====================
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      security: []
+      summary: 注册
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserCreate' }
+      responses:
+        '201':
+          description: 注册成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserResponse' }
+        '409':
+          description: "用户名/邮箱已存在（error_code: USERNAME_ALREADY_EXISTS / EMAIL_ALREADY_EXISTS）"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppError' }
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      summary: 登录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username_or_email, password]
+              properties:
+                username_or_email: { type: string }
+                password: { type: string }
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Token' }
+        '401':
+          description: 凭证无效（INVALID_CREDENTIALS）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppError' }
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      security: []
+      summary: 刷新令牌
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: 新令牌对
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Token' }
+        '401':
+          description: 无效刷新令牌（INVALID_TOKEN）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppError' }
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: 登出（无状态校验，不吊销令牌）
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessResponse' }
+  /api/v1/auth/password-reset:
+    post:
+      tags: [Auth]
+      security: []
+      summary: 密码重置
+      parameters:
+        - { name: email, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessResponse' }
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      summary: 当前用户信息
+      responses:
+        '200':
+          description: 用户信息
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserResponse' }
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppError' }
+
+  # ===================== Agent（核心） =====================
+  /api/v1/agent/execute/:
+    post:
+      tags: [Agent]
+      summary: 执行任务（非流式）
+      description: 输入守卫先检；最终回答过 output_guard 掩码。守卫拒绝时 HTTP 200 但 success=false。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentExecuteRequest' }
+      responses:
+        '200':
+          description: 执行结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentExecuteResponse' }
+        '401':
+          description: 未登录
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppError' }
+  /api/v1/agent/execute/stream:
+    post:
+      tags: [Agent]
+      summary: 执行任务（SSE 流式，主链路）
+      description: |
+        `text/event-stream`。事件格式 `event: {name}\ndata: {json}\n\n`。
+        框架级事件：start / heartbeat / stopped / error / complete；
+        on_step 透传：planning / resumed / todos / todo_start / todo_complete /
+        thought / next_moves / observation / project_tree / final_summary /
+        context_usage（共 16 种）。
+        终态语义：complete=正常结束（success:false 时落库 failed）；error=异常；
+        stopped=用户中断/断连。**先落库再推终态事件**。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentExecuteRequest' }
+      responses:
+        '200':
+          description: SSE 事件流
+          content:
+            text/event-stream:
+              schema: { type: string }
+              example: |
+                event: start
+                data: {"task_id":"session_1","task_path":"tasks/xxx"}
+
+                event: todos
+                data: {"todos":[{"id":"t1","title":"建目录","status":"pending"}]}
+
+                event: final_summary
+                data: {"summary":"已完成","suggestions":["下一步A"],"success":true}
+
+                event: complete
+                data: {"success":true,"result":"..."}
+        '401':
+          description: 未登录
+  /api/v1/agent/status/{task_id}:
+    get:
+      tags: [Agent]
+      security: []
+      summary: 查询任务状态
+      parameters:
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 状态
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id: { type: string }
+                  status: { type: string }
+                  session_id: { type: string }
+  /api/v1/agent/abort/{task_id}:
+    post:
+      tags: [Agent]
+      security: []
+      summary: 中止运行中的任务
+      parameters:
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 中止结果（随后 SSE 推 stopped）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  task_id: { type: string }
+                  stopped: { type: boolean }
+                  cancelled: { type: boolean }
+  /api/v1/agent/debug/tasks:
+    get:
+      tags: [Agent]
+      security: []
+      summary: 调试：运行中任务快照
+      responses:
+        '200':
+          description: 调试信息
+  /api/v1/agent/ping/{task_id}:
+    get:
+      tags: [Agent]
+      security: []
+      summary: 调试：任务存活探测
+      parameters:
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 探测结果
+  /api/v1/agent/list-sessions/:
+    get:
+      tags: [Agent]
+      security: []
+      summary: 会话列表（未登录空列表；非管理员仅本人）
+      responses:
+        '200':
+          description: 会话分页
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: integer, example: 200 }
+                  message: { type: string }
+                  data:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      sessions:
+                        type: array
+                        items: { $ref: '#/components/schemas/SessionSummary' }
+  /api/v1/agent/get-session/:
+    get:
+      tags: [Agent]
+      security: []
+      summary: 会话详情（消息 + 文件树 + 上下文用量）
+      parameters:
+        - { name: session_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 会话详情
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: integer, example: 0 }
+                  message: { type: string }
+                  data: { $ref: '#/components/schemas/SessionDetail' }
+  /api/v1/agent/create-session/:
+    post:
+      tags: [Agent]
+      security: []
+      summary: 创建会话（落库失败 503）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                session_id: { type: string, nullable: true }
+                title: { type: string, default: 新会话 }
+                user_input: { type: string, default: '' }
+                files:
+                  type: array
+                  nullable: true
+                  items: { type: object }
+      responses:
+        '200':
+          description: 创建结果
+        '503':
+          description: 会话创建失败（SERVICE_UNAVAILABLE）
+  /api/v1/agent/execute/:
+    delete:
+      tags: [Agent]
+      security: []
+      summary: 删除会话/任务
+      parameters:
+        - { name: task_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 已删除
+  /api/v1/agent/sessions/{session_id}:
+    patch:
+      tags: [Agent]
+      summary: 重命名会话（实际强制登录；非本人 403、不存在 404）
+      parameters:
+        - { name: session_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string, maxLength: 200 }
+      responses:
+        '200':
+          description: 新标题
+        '400':
+          description: 标题为空或超长
+        '403':
+          description: 非本人会话
+        '404':
+          description: 会话不存在
+  /api/v1/agent/read-file/:
+    get:
+      tags: [Agent]
+      security: []
+      summary: 读任务目录内文件（防穿越）
+      parameters:
+        - { name: file_path, in: query, required: true, schema: { type: string }, description: 相对 tasks 根 }
+      responses:
+        '200':
+          description: 文件内容
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: integer, example: 0 }
+                  data:
+                    type: object
+                    properties:
+                      path: { type: string }
+                      content: { type: string, maxLength: 200000 }
+                      truncated: { type: boolean }
+        '400':
+          description: 路径越界/是目录
+        '404':
+          description: 不存在
+  /api/v1/agent/get-files/:
+    get:
+      tags: [Agent]
+      security: []
+      summary: 会话产出文件清单
+      parameters:
+        - { name: session_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 文件列表
+  /api/v1/agent/download-file/:
+    get:
+      tags: [Agent]
+      security: []
+      summary: 下载单文件
+      parameters:
+        - { name: file_path, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 文件流（attachment）
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+  /api/v1/agent/download-dir/:
+    get:
+      tags: [Agent]
+      security: []
+      summary: 下载目录（zip）
+      parameters:
+        - { name: dir, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: zip 流
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+
+  # ===================== Session（内存，历史遗留） =====================
+  /api/v1/session/list-sessions/:
+    get:
+      tags: [Session]
+      summary: 内存会话列表
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0, minimum: 0 } }
+      responses:
+        '200':
+          description: 会话数组
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SessionResponse' }
+  /api/v1/session/get-session/:
+    get:
+      tags: [Session]
+      summary: 内存会话详情
+      parameters:
+        - { name: session_id, in: query, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, minimum: 1, maximum: 100 } }
+      responses:
+        '200':
+          description: 会话
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionResponse' }
+  /api/v1/session/create-session/:
+    post:
+      tags: [Session]
+      summary: 创建内存会话
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                session_id: { type: string, nullable: true }
+                title: { type: string, default: 新会话 }
+                user_input: { type: string, default: '' }
+                files:
+                  type: array
+                  nullable: true
+                  items: { type: object }
+      responses:
+        '200':
+          description: 会话
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionResponse' }
+  /api/v1/session/{session_id}:
+    get:
+      tags: [Session]
+      summary: 按 ID 取内存会话
+      parameters:
+        - { name: session_id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        '200':
+          description: 会话
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionResponse' }
+    delete:
+      tags: [Session]
+      summary: 删除内存会话
+      parameters:
+        - { name: session_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 已删除
+  /api/v1/session/:
+    get:
+      tags: [Session]
+      summary: 内存会话列表（无斜杠形式）
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 20 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        '200':
+          description: 会话数组
+
+  # ===================== Users =====================
+  /api/v1/users:
+    get:
+      tags: [Users]
+      summary: 用户分页列表（管理员）
+      parameters:
+        - { name: page, in: query, schema: { type: integer, default: 1, minimum: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+        - { name: keyword, in: query, schema: { type: string } }
+        - { name: role, in: query, schema: { type: string, enum: [user, admin, moderator] } }
+        - { name: status, in: query, schema: { type: string, enum: [active, inactive, banned] } }
+        - { name: is_active, in: query, schema: { type: boolean } }
+      responses:
+        '200':
+          description: 分页用户
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/UserListResponse' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+        '403':
+          description: 非管理员
+  /api/v1/users/profile/llm-key:
+    get:
+      tags: [Users]
+      summary: 查询本人 LLM Key 配置状态（掩码）
+      responses:
+        '200':
+          description: 状态
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LLMKeyStatus' }
+    put:
+      tags: [Users]
+      summary: 设置/清除本人 LLM Key（空串=清除；无效 key 返回 200+error 字段）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                api_key: { type: string, default: '' }
+      responses:
+        '200':
+          description: 结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LLMKeyStatus' }
+  /api/v1/users/profile/{user_id}:
+    get:
+      tags: [Users]
+      security: []
+      summary: 公开用户资料
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: 用户资料
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserResponse' }
+  /api/v1/users/profile:
+    patch:
+      tags: [Users]
+      summary: 修改本人资料
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nickname: { type: string, nullable: true }
+                avatar: { type: string, nullable: true }
+                bio: { type: string, nullable: true }
+      responses:
+        '200':
+          description: 更新后用户
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserResponse' }
+  /api/v1/users/profile/password:
+    patch:
+      tags: [Users]
+      summary: 修改本人密码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [old_password, new_password]
+              properties:
+                old_password: { type: string }
+                new_password: { type: string, minLength: 8, maxLength: 128 }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessResponse' }
+        '401':
+          description: 旧密码错误
+  /api/v1/users/{user_id}:
+    patch:
+      tags: [Users]
+      summary: 管理员改用户角色/状态
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: { type: string, nullable: true, enum: [user, admin, moderator] }
+                status: { type: string, nullable: true, enum: [active, inactive, banned] }
+                nickname: { type: string, nullable: true }
+      responses:
+        '200':
+          description: 更新后用户
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserResponse' }
+        '403':
+          description: 非管理员
+    delete:
+      tags: [Users]
+      summary: 管理员删除用户（不能删自己）
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessResponse' }
+        '400':
+          description: 不能删除自己
+
+  # ===================== Posts =====================
+  /api/v1/posts:
+    get:
+      tags: [Posts]
+      security: []
+      summary: 文章分页列表（登录后可见草稿）
+      parameters:
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+        - { name: keyword, in: query, schema: { type: string } }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: tag, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [draft, published, archived] } }
+        - { name: author_id, in: query, schema: { type: integer } }
+      responses:
+        '200':
+          description: 分页文章
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/PostListItem' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+    post:
+      tags: [Posts]
+      summary: 创建文章
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PostCreate' }
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PostResponse' }
+        '422':
+          description: 参数校验失败
+  /api/v1/posts/{post_id}:
+    get:
+      tags: [Posts]
+      security: []
+      summary: 文章详情
+      parameters:
+        - { name: post_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: 文章
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PostResponse' }
+        '404':
+          description: 不存在（NOT_FOUND）
+    patch:
+      tags: [Posts]
+      summary: 修改文章（作者或管理员）
+      parameters:
+        - { name: post_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PostUpdate' }
+      responses:
+        '200':
+          description: 更新后文章
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PostResponse' }
+        '400':
+          description: 无权限（BAD_REQUEST）
+    delete:
+      tags: [Posts]
+      summary: 删除文章（作者或管理员）
+      parameters:
+        - { name: post_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessResponse' }
+  /api/v1/posts/slug/{slug}:
+    get:
+      tags: [Posts]
+      security: []
+      summary: 按 slug 取文章
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 文章
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PostResponse' }
+  /api/v1/posts/{post_id}/publish:
+    post:
+      tags: [Posts]
+      summary: 发布文章
+      parameters:
+        - { name: post_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: 文章
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PostResponse' }
+  /api/v1/posts/{post_id}/archive:
+    post:
+      tags: [Posts]
+      summary: 归档文章
+      parameters:
+        - { name: post_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: 文章
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PostResponse' }
+  /api/v1/posts/my/posts:
+    get:
+      tags: [Posts]
+      summary: 我的文章
+      parameters:
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, default: 20 } }
+        - { name: status, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: 分页文章
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/PostListItem' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+
+  # ===================== Storage =====================
+  /api/v1/storage/upload:
+    post:
+      tags: [Storage]
+      summary: 上传文件
+      parameters:
+        - { name: folder, in: query, schema: { type: string, default: '' } }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: 上传结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StorageUploadResponse' }
+  /api/v1/storage/list:
+    get:
+      tags: [Storage]
+      summary: 文件列表
+      parameters:
+        - { name: prefix, in: query, schema: { type: string, default: '' } }
+        - { name: limit, in: query, schema: { type: integer, default: 100 } }
+      responses:
+        '200':
+          description: 列表
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StorageListResponse' }
+  /api/v1/storage/{key}:
+    delete:
+      tags: [Storage]
+      summary: 删除文件
+      parameters:
+        - { name: key, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 结果
+  /api/v1/storage/{key}/url:
+    get:
+      tags: [Storage]
+      summary: 预签名 URL
+      parameters:
+        - { name: key, in: path, required: true, schema: { type: string } }
+        - { name: expires, in: query, schema: { type: integer, default: 3600 } }
+      responses:
+        '200':
+          description: URL
+
+  # ===================== Social =====================
+  /api/v1/social/send:
+    post:
+      tags: [Social]
+      summary: 发送社交消息
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, chat_id, content]
+              properties:
+                provider: { type: string, enum: [feishu, wecom, dingtalk, telegram] }
+                chat_id: { type: string }
+                content: { type: string }
+                msg_type: { type: string, default: text, enum: [text, image, markdown] }
+      responses:
+        '200':
+          description: 发送结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SocialSendResponse' }
+  /api/v1/social/providers:
+    get:
+      tags: [Social]
+      summary: 可用渠道
+      responses:
+        '200':
+          description: 渠道列表
+  /api/v1/social/send_image:
+    post:
+      tags: [Social]
+      summary: 发送图片（参数在 query）
+      parameters:
+        - { name: provider, in: query, required: true, schema: { type: string } }
+        - { name: chat_id, in: query, required: true, schema: { type: string } }
+        - { name: image_url, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 发送结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SocialSendResponse' }
+
+  # ===================== Notification =====================
+  /api/v1/notification/send:
+    post:
+      tags: [Notification]
+      summary: 发送通知
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationSendRequest' }
+      responses:
+        '200':
+          description: 发送结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationSendResponse' }
+  /api/v1/notification/broadcast:
+    post:
+      tags: [Notification]
+      summary: 广播（channels/recipients 在 body；subject/content 在 query）
+      parameters:
+        - { name: subject, in: query, required: true, schema: { type: string } }
+        - { name: content, in: query, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channels, recipients]
+              properties:
+                channels:
+                  type: array
+                  items: { type: string }
+                recipients:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '200':
+          description: 各渠道结果
+  /api/v1/notification/scheduled:
+    post:
+      tags: [Notification]
+      summary: 定时任务通知回执（task_name/status/result 在 query；channels 在 body）
+      parameters:
+        - { name: task_name, in: query, required: true, schema: { type: string } }
+        - { name: status, in: query, required: true, schema: { type: string } }
+        - { name: result, in: query, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channels]
+              properties:
+                channels:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: 各渠道结果
+
+  # ===================== Budget =====================
+  /api/v1/budget/status:
+    get:
+      tags: [Budget]
+      summary: 预算状态
+      responses:
+        '200':
+          description: 预算
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BudgetStatusResponse' }
+  /api/v1/budget/reset/daily:
+    post:
+      tags: [Budget]
+      summary: 重置日预算
+      responses:
+        '200':
+          description: 已重置
+  /api/v1/budget/reset/monthly:
+    post:
+      tags: [Budget]
+      summary: 重置月预算
+      responses:
+        '200':
+          description: 已重置
+
+  # ===================== Health =====================
+  /api/v1/health/health:
+    get:
+      tags: [Health]
+      security: []
+      summary: 健康检查
+      responses:
+        '200':
+          description: 健康
+  /api/v1/health/health/detailed:
+    get:
+      tags: [Health]
+      security: []
+      summary: 详细健康（模型可用数、预算状态）
+      responses:
+        '200':
+          description: 详情
+  /api/v1/health/ready:
+    get:
+      tags: [Health]
+      security: []
+      summary: 就绪探针
+      responses:
+        '200':
+          description: 就绪
+  /api/v1/health/live:
+    get:
+      tags: [Health]
+      security: []
+      summary: 存活探针
+      responses:
+        '200':
+          description: 存活
+
+  # ===================== WebSocket =====================
+  /api/v1/ws/ws/{session_id}:
+    get:
+      tags: [WebSocket]
+      security: []
+      summary: WebSocket 执行通道（升级）
+      description: |
+        入站 JSON：`{"type":"execute"|"ping", "task": "...", "context": {...}}`；
+        出站：`connected` / `pong` / `result` / `error`。当前未校验 token。
+      parameters:
+        - { name: session_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '101':
+          description: 协议切换
+  /api/v1/ws/ws/list:
+    get:
+      tags: [WebSocket]
+      security: []
+      summary: 活跃 WS 连接
+      responses:
+        '200':
+          description: 连接列表
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 登录 `/api/v1/auth/login` 获取 access_token
+
+  schemas:
+    AppError:
+      type: object
+      description: 业务错误信封（AppException）；完整错误码表见 error-codes.md
+      properties:
+        error: { type: string }
+        status_code: { type: integer }
+        error_code: { type: string, example: NOT_FOUND }
+        extra: { type: object, additionalProperties: true }
+      required: [error, status_code]
+
+    SuccessResponse:
+      type: object
+      properties:
+        success: { type: boolean, default: true }
+        message: { type: string, default: 操作成功 }
+
+    Token:
+      type: object
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        token_type: { type: string, default: bearer }
+        expires_in: { type: integer, description: 秒 }
+
+    UserCreate:
+      type: object
+      required: [username, email, password]
+      properties:
+        username: { type: string, minLength: 3, maxLength: 50, pattern: '^[a-zA-Z0-9_]+$' }
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8, maxLength: 128 }
+        nickname: { type: string, maxLength: 100, nullable: true }
+
+    UserResponse:
+      type: object
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        email: { type: string }
+        nickname: { type: string, nullable: true }
+        avatar: { type: string, nullable: true }
+        bio: { type: string, nullable: true }
+        role: { type: string, enum: [user, admin, moderator] }
+        status: { type: string, enum: [active, inactive, banned] }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        last_login_at: { type: string, format: date-time, nullable: true }
+
+    UserListResponse:
+      type: object
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        nickname: { type: string, nullable: true }
+        avatar: { type: string, nullable: true }
+        role: { type: string }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+
+    LLMKeyStatus:
+      type: object
+      properties:
+        configured: { type: boolean }
+        masked: { type: string, nullable: true, example: 'sk-***3456' }
+        error: { type: string, nullable: true }
+
+    PageMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        page_size: { type: integer }
+        total_items: { type: integer }
+        total_pages: { type: integer }
+        has_next: { type: boolean }
+        has_prev: { type: boolean }
+
+    AgentExecuteRequest:
+      type: object
+      required: [task]
+      properties:
+        task: { type: string, description: 自然语言任务 }
+        session_id: { type: string, nullable: true, description: 缺省时生成 user_id+task 前缀 }
+        strategy: { type: string, nullable: true }
+        context: { type: object, nullable: true, additionalProperties: true }
+        task_path: { type: string, nullable: true }
+
+    AgentExecuteResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        task_id: { type: string }
+        result: { type: object, nullable: true, additionalProperties: true }
+        intent: { type: string, nullable: true }
+        warning: { type: string, nullable: true }
+        error: { type: string, nullable: true }
+        execution_time: { type: number, nullable: true }
+
+    SessionSummary:
+      type: object
+      properties:
+        session_id: { type: string }
+        title: { type: string }
+        created_at: { type: string }
+        updated_at: { type: string }
+        task_path: { type: string, nullable: true }
+
+    SessionDetail:
+      type: object
+      properties:
+        session_id: { type: string }
+        title: { type: string }
+        messages:
+          type: array
+          items:
+            type: object
+            description: type=user 或 thinking（thinking 含 steps[]，step.type ∈ thinking/planning/next_moves/observation/complete）
+        file_tree: { type: array, items: { type: object } }
+        task_path: { type: string, nullable: true }
+        context_usage: { type: object, additionalProperties: true }
+
+    SessionResponse:
+      type: object
+      properties:
+        session_id: { type: string }
+        user_id: { type: string }
+        messages: { type: array, items: { type: object } }
+        created_at: { type: string }
+        updated_at: { type: string }
+
+    PostCreate:
+      type: object
+      required: [title, content]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 255 }
+        content: { type: string }
+        summary: { type: string, nullable: true }
+        cover_image: { type: string, nullable: true }
+        category: { type: string, nullable: true }
+        tags: { type: string, nullable: true, description: 逗号分隔 }
+        visibility: { type: string, default: public, enum: [public, private, members_only] }
+        slug: { type: string, nullable: true, description: 缺省由标题生成 }
+        meta_description: { type: string, maxLength: 160, nullable: true }
+
+    PostUpdate:
+      type: object
+      properties:
+        title: { type: string }
+        content: { type: string }
+        summary: { type: string, nullable: true }
+        cover_image: { type: string, nullable: true }
+        category: { type: string, nullable: true }
+        tags: { type: string, nullable: true }
+        status: { type: string, enum: [draft, published, archived] }
+        visibility: { type: string, enum: [public, private, members_only] }
+        slug: { type: string, nullable: true }
+        meta_description: { type: string, nullable: true }
+
+    AuthorInfo:
+      type: object
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        nickname: { type: string }
+        avatar: { type: string, nullable: true }
+
+    PostListItem:
+      type: object
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        summary: { type: string, nullable: true }
+        cover_image: { type: string, nullable: true }
+        slug: { type: string }
+        category: { type: string, nullable: true }
+        status: { type: string }
+        view_count: { type: integer }
+        like_count: { type: integer }
+        author: { $ref: '#/components/schemas/AuthorInfo' }
+        created_at: { type: string, format: date-time }
+        published_at: { type: string, format: date-time, nullable: true }
+
+    PostResponse:
+      allOf:
+        - $ref: '#/components/schemas/PostListItem'
+        - type: object
+          properties:
+            content: { type: string }
+            tags: { type: string, nullable: true }
+            visibility: { type: string }
+            comment_count: { type: integer }
+            meta_description: { type: string, nullable: true }
+            updated_at: { type: string, format: date-time }
+
+    StorageUploadResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        url: { type: string, nullable: true }
+        key: { type: string, nullable: true }
+        error: { type: string, nullable: true }
+
+    StorageListResponse:
+      type: object
+      properties:
+        files: { type: array, items: { type: object } }
+        total: { type: integer }
+
+    SocialSendResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        message_id: { type: string, nullable: true }
+        error: { type: string, nullable: true }
+
+    NotificationSendRequest:
+      type: object
+      required: [channel, recipients, subject, content]
+      properties:
+        channel: { type: string, enum: [email, feishu, wecom, dingtalk, telegram] }
+        recipients: { type: array, items: { type: string } }
+        subject: { type: string }
+        content: { type: string }
+        html: { type: boolean, default: false }
+        attachments:
+          type: array
+          nullable: true
+          items: { type: object }
+
+    NotificationSendResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        message_id: { type: string, nullable: true }
+        error: { type: string, nullable: true }
+
+    BudgetStatusResponse:
+      type: object
+      properties:
+        daily_limit: { type: number }
+        daily_used: { type: number }
+        daily_remaining: { type: number }
+        monthly_limit: { type: number }
+        monthly_used: { type: number }
+        monthly_remaining: { type: number }
+        status: { type: string }
+        warning_threshold: { type: number }
+        degradation_threshold: { type: number }

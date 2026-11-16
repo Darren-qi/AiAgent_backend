@@ -97,7 +97,7 @@ async def create_post(
     需要登录。创建的文章默认为草稿状态。
     """
     post_service = PostService(db)
-    post = await post_service.create_post(current_user.id, post_data)
+    post = await post_service.create_post(current_user["id"], post_data)
 
     return PostResponse.model_validate(post)
 
@@ -259,7 +259,7 @@ async def get_my_posts(
     """
     post_service = PostService(db)
     posts, total = await post_service.get_user_posts(
-        user_id=current_user.id,
+        user_id=current_user["id"],
         page=page,
         page_size=page_size,
         status=status,

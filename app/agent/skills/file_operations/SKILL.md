@@ -45,6 +45,42 @@ parameters:
           type: string
           description: "创建模式：file（单个文件）/ project（项目结构）"
           default: file
+    old_text:
+      type: string
+      description: "edit 要替换的原文（须与文件内容逐字一致且唯一；命中多处时配 replace_all）"
+      required: false
+    new_text:
+      type: string
+      description: "edit 替换后的新文本"
+      required: false
+    replace_all:
+      type: boolean
+      description: "edit 命中多处时是否全部替换，默认 false"
+      default: false
+      required: false
+    files:
+      type: array
+      description: "批量数组：write=[{path,content}]、read/delete=[{path}]、move=[{path,dest}]。单次≤4文件、总内容≤6000字，超出拆多次调用（防输出截断成残缺JSON）"
+      required: false
+    edits:
+      type: array
+      description: "批量编辑数组 [{path,old_text,new_text,replace_all?}]，一次完成多处/多文件修改，单次≤4文件"
+      required: false
+    paths:
+      type: array
+      description: "delete 的批量路径数组，与 path 二选一，如 [\"a.txt\", \"dir\"]"
+      required: false
+# 操作目标参数契约：params 缺这些键即结构崩坏，执行前拦截（validate_params_structure）
+operation_targets:
+  create: [path]
+  write: [path, files]
+  read: [path, files]
+  edit: [path, edits]
+  list: []
+  delete: [path, files, paths]
+  move: [path, files, from, src]
+# 出错 JIT 时随全量参数 schema 一起注入（第三级：选定工具后的具体使用方法）
+usage: "params 必须是 JSON 对象且键必须是已声明参数；目标参数按 operation 必选其一：write/read→path 或 files[]，edit→path 或 edits[]，delete→path、files[] 或 paths[]，move→path 或 files[]，list/create→path。批量单次≤4文件、总内容≤6000字，超出拆多次调用。缺目标参数被拦时补 path 或改用 files 批量，禁止把大段文件内容塞进单个参数。"
 ---
 
 # File Operations Skill

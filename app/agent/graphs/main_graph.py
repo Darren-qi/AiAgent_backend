@@ -238,6 +238,9 @@ class AgentGraph:
         self._ctx_compress_count = 0   # 本会话累计压缩次数（跨 turn 从会话 KV 续读）
         self._ctx_floor = 0            # 用量底线=上轮真实峰值（KV 续读，跨轮不归零）
         self._ctx_peak = 0             # 本轮已推送的真实峰值
+        self._billed_base_in = 0       # 会话累计计费基数（KV 续读，跨轮累加不归零）
+        self._billed_base_out = 0
+        self._billed_base_cost = 0.0
         self._supervisor = SupervisorGraph()
         self._replanner = Replanner()
         self._loop_detector = default_loop_detector
@@ -629,6 +632,26 @@ class AgentGraph:
             self._intent_detector.set_task_id(task_id)
             self._integrator.set_task_id(task_id)
 
+        # P1/P2（2026-11-14）：本 turn 计费累计清零 + usage scope。
+        # factory 侧每次 LLM 调用按此 scope 累计真实 prompt/completion/cost，
+        # key 与 set_usage_scope 一致（task_id 可能为 None → 回落 session_id）。
+        try:
+            from app.agent.llm.factory import set_usage_scope, reset_task_usage
+            _usage_key = task_id or session_id or "global"
+            set_usage_scope(_usage_key)
+            reset_task_usage(_usage_key)
+        except Exception as _ue:  # noqa: BLE001 - 追踪失败不阻塞执行
+            logger.debug("usage scope 初始化失败（降级无累计）: %s", _ue)
+
+        # 用户级 DeepSeek key（2026-11-14）：本 turn 按 session → user 装载
+        # 用户自己的 key（contextvar）；未填 / 查询失败一律回落系统 key，
+        # 绝不阻塞执行。
+        try:
+            from app.agent.llm.user_api_key import apply_turn_user_api_key
+            await apply_turn_user_api_key(session_id)
+        except Exception as _uke:  # noqa: BLE001
+            logger.debug("用户 API key 装载失败（降级系统 key）: %s", _uke)
+
         logger.info(f"[AgentGraph] 开始执行任务: {task[:100]}...")
 
         # 执行过程中调用回调
@@ -660,6 +683,11 @@ class AgentGraph:
         self._ctx_compress_count = 0
         self._ctx_floor = 0
         self._ctx_peak = 0
+        # 会话累计计费基数（2026-11-14 用户定：一个会话累加，不每轮归零）：
+        # 每 turn 从会话 KV 续读上轮为止的 billed_* 累计，收尾按基数+本轮回写
+        self._billed_base_in = 0
+        self._billed_base_out = 0
+        self._billed_base_cost = 0.0
         if session_id:
             try:
                 from app.agent.tools.session_context import get_session_context
@@ -674,8 +702,13 @@ class AgentGraph:
                         self._ctx_compress_count = 0
                     self._ctx_floor = int(_stored.get("used", 0) or 0)
                     self._ctx_peak = self._ctx_floor
+                    # billed_* 语义=会话累计（cc_ver>=3 有键；更旧值从 0 起算）
+                    if int(_stored.get("cc_ver", 0) or 0) >= 3:
+                        self._billed_base_in = int(_stored.get("billed_in", 0) or 0)
+                        self._billed_base_out = int(_stored.get("billed_out", 0) or 0)
+                        self._billed_base_cost = float(_stored.get("billed_cost", 0.0) or 0.0)
             except Exception as _se:
-                logger.debug("[CtxMgr] 用量续读失败（降级 0）: %s", _se)
+                logger.debug(f"[CtxMgr] 用量续读失败（降级 0）: {_se}")
 
         try:
             # 检查是否已取消
@@ -712,6 +745,10 @@ class AgentGraph:
 
             if restored and self._state_manager.todos:
                 # 恢复执行：发送恢复状态给前端
+                #（context._todos 同步断点待办：终稿总结/前端同步依赖它，
+                #  否则恢复轮的完成总结拿不到待办清单）
+                state.context["_todos"] = [
+                    t.to_dict() for t in self._state_manager.todos]
                 if on_step:
                     on_step("resumed", {
                         "message": "任务已恢复，继续执行",
@@ -763,6 +800,12 @@ class AgentGraph:
             supervisor_decision = await self._supervisor.evaluate(state.to_dict())
             if supervisor_decision.action == "reject":
                 state.error = supervisor_decision.reason
+                # 先落库再发终态事件（2026-11-14 TC-S16-03 e2e 实测：前端收到
+                # 终态事件即断开→本任务被 cancel，后置 await 会被打断丢断点；
+                # 同 agent.py「先落库再通知前端」原则）
+                if self._state_manager and session_id:
+                    self._state_manager.note_failure(state.error)
+                    await self._state_manager.save_state()
                 if on_step:
                     on_step("error", {"message": state.error})
                 return self._format_error(state.error, state)
@@ -788,14 +831,29 @@ class AgentGraph:
             # 有待办失败/错误残留：发 error 不发 complete，禁止假完成
             # （轮次上限截断除外——那是待继续执行的半成品，保持原 complete 语义）
             if state.error and not state.context.get("_rounds_capped"):
-                logger.warning(f"[AgentGraph] 任务以失败收尾: {state.error}")
-                if on_step:
-                    on_step("error", {"message": state.error})
+                logger.warning(f"[Agent] 任务以失败收尾: {state.error}")
+                # 断点保留（2026-11-14 TC-S16-03）：失败收尾也把未完成待办与
+                # 失败原因落盘，供下轮 cap_restore 判「继续/新任务」；轮次
+                # 上限截断（_rounds_capped）走正常保留分支，不在这里重复处理。
+                # 先落库再发终态事件：前端收到 error即断开 → 本任务被 cancel，
+                # 后置 await 会被打断（e2e 实测），断点必须先写完。
                 if self._state_manager and session_id:
-                    await self._state_manager.clear_state()
+                    self._state_manager.note_failure(state.error)
+                    await self._state_manager.save_state()
                 if task_id:
                     task_manager.fail_task(task_id)
+                if on_step:
+                    on_step("error", {"message": state.error})
                 return self._format_error(state.error, state)
+
+            # 先清断点+落任务状态，再发 complete（2026-11-14 TC-S16-03 e2e 实测：
+            # 前端收到 complete 立即断开 → 本任务被 cancel，后置 await 被打断，
+            # 断点清不掉且任务被误标"任务被取消"；同 agent.py「先落库再通知前端」）
+            # 轮次上限截断时保留状态,供继续执行
+            if self._state_manager and session_id and not state.context.get("_rounds_capped"):
+                await self._state_manager.clear_state()
+            if task_id:
+                task_manager.complete_task(task_id)
 
             if on_step:
                 final_message = None
@@ -810,21 +868,23 @@ class AgentGraph:
                     ), state)
                 })
 
-            # 任务完成，清除持久化状态(轮次上限截断时保留,供继续执行)
-            if self._state_manager and session_id and not state.context.get("_rounds_capped"):
-                await self._state_manager.clear_state()
-            if task_id:
-                task_manager.complete_task(task_id)
-
             return self._format_response(state, exec_context)
 
         except Exception as e:
-            logger.exception(f"[AgentGraph] 执行异常: {e}")
+            logger.exception(f"[Agent] 执行异常: {e}")
             state.error = str(e)
-            if on_step:
-                on_step("error", {"message": str(e)})
+            # 断点保留：异常中断同样记失败标记（best-effort，不阻塞报错返回）。
+            # 先落库再发终态事件（前端收到 error 即断开，后置 await 会被打断）
+            if self._state_manager and session_id:
+                try:
+                    self._state_manager.note_failure(str(e))
+                    await self._state_manager.save_state()
+                except Exception as _ck_e:
+                    logger.warning(f"[Agent] 失败断点保存失败(忽略): {_ck_e}")
             if task_id:
                 task_manager.fail_task(task_id)
+            if on_step:
+                on_step("error", {"message": str(e)})
             return self._format_error(state.error, state)
         finally:
             # ContextManager turn 后钩子：重量级卸载/压缩/长循环折叠
@@ -845,19 +905,27 @@ class AgentGraph:
                 try:
                     import asyncio as _aio
                     from app.agent.tools.session_context import set_session_context
+                    from app.agent.llm.factory import (
+                        get_task_usage, get_last_usage)
                     _max = self._ctx_mgr.cfg.max_tokens
                     # 11-13：报本轮真实峰值（接续 floor），不再用重建片段 budget.used
                     _used = max(
                         getattr(self, "_ctx_peak", 0),
                         getattr(self, "_ctx_floor", 0),
                     )
+                    _tu = get_task_usage()
                     _payload = {
                         "used": _used,
                         "max": _max,
                         "ratio": round(_used / _max, 4) if _max else 0.0,
                         "compress_count": self._ctx_compress_count,
-                        "cc_ver": 2,
+                        # v3（2026-11-14）：used=真实 usage 单请求峰值；
+                        # billed_* = 会话累计（KV 基数 + 本轮，跨轮累加不归零，
+                        # 2026-11-14 用户定；读取侧 >=3 兼容）
+                        "cc_ver": 3,
                         "step": self._ctx_step,
+                        **self._billed_payload(_tu),
+                        "last_in": int(get_last_usage().get("prompt_tokens") or 0),
                     }
                     if on_step:
                         on_step("context_usage", _payload)
@@ -867,6 +935,18 @@ class AgentGraph:
                 except Exception as _pe:
                     logger.warning("[CtxMgr] 用量推送/持久化失败（不阻塞）: %s", _pe)
                 self._ctx_mgr = None
+
+    def _billed_payload(self, tu: dict) -> dict:
+        """会话累计计费三元组 = 会话 KV 续读基数 + 本 turn 真实 usage。
+
+        2026-11-14 用户定：一个会话累加计费，billed_* 不再每轮归零。
+        step 实时事件与 turn 收尾落库共用此公式，保证推送与持久化口径一致。
+        """
+        return {
+            "billed_in": self._billed_base_in + int(tu.get("prompt_tokens") or 0),
+            "billed_out": self._billed_base_out + int(tu.get("completion_tokens") or 0),
+            "billed_cost": round(self._billed_base_cost + float(tu.get("cost") or 0.0), 6),
+        }
 
     def _create_execution_context(self, state: AgentState) -> ExecutionContext:
         """
@@ -1337,14 +1417,23 @@ class AgentGraph:
                         # 实时上下文占用 → 前端工具栏（2026-11-12 方案B；
                         # 11-13 修为真实值：分子=本步完整提示词 token 数
                         # （含 history_note/预算提示/目录与失败信息/召回片段），
-                        # 并接续上轮峰值 floor → 跨轮不再从 0 开始）
+                        # 并接续上轮峰值 floor → 跨轮不再从 0 开始；
+                        # 11-14 P1/P2：used 改为真实 usage 单请求峰值
+                        # （含提示词模板+技能/工具清单+task，DeepSeek 口径），
+                        # 无真实值回退估算；新增 billed_* 本 turn 计费累计。
                         if on_step:
                             try:
                                 from app.agent.context import count_tokens as _ctok
+                                from app.agent.llm.factory import (
+                                    get_task_usage, get_last_usage)
                                 _max_u = self._ctx_mgr.cfg.max_tokens
                                 # 本步完整上下文 token（系统提示词在 Planner 内部拼）
-                                _real_u = _ctok(thought_context)
-                                _used_u = max(self._ctx_floor, _real_u)
+                                _est_u = _ctok(thought_context)
+                                _tu = get_task_usage()
+                                _real_peak = int(_tu.get("peak_in") or 0)
+                                _used_u = max(self._ctx_floor, _real_peak) \
+                                    if _real_peak \
+                                    else max(self._ctx_floor, _est_u)
                                 if _used_u > self._ctx_peak:
                                     self._ctx_peak = _used_u
                                 on_step("context_usage", {
@@ -1353,6 +1442,9 @@ class AgentGraph:
                                     "ratio": round(_used_u / _max_u, 4) if _max_u else 0.0,
                                     "compress_count": self._ctx_compress_count,
                                     "step": self._ctx_step,
+                                    "used_est": _est_u,
+                                    **self._billed_payload(_tu),
+                                    "last_in": int(get_last_usage().get("prompt_tokens") or 0),
                                 })
                             except Exception:
                                 pass
@@ -1624,16 +1716,19 @@ class AgentGraph:
                 )
             _miss_msg = ""
             if _missing:
-                # 任务目录放句首并写明查找根（2026-11-13 用户反馈：细节里
-                # 只在尾部括号带一句、路径全是相对路径，看起来"没带任务目录
-                # 从下一级开始找"）。句首先声明这是待办缺件、不是本步动作
-                # 失败（read 轮后面跟着它，会被误读成"读取文件失败"）。
+                # 文案第三次迭代（2026-11-14 用户定稿）：不以待办状态断言
+                # 开头（"待办未完成"指待办项、用户看过程易误以为本步失败），
+                # 只说本步状态 + 具体问题：本步操作成功与否 + 对照任务目录缺
+                # 哪些文件；任务目录仍放句首带查找根（2026-11-13：相对路径
+                # 易被误读成"没带任务目录从下一级找"）。
+                _tool_ok = bool(execution_result.get("success", False))
+                _head = "本步操作已成功，但" if _tool_ok else "本步操作失败，"
+                _head += (f"对照任务目录 {_tp} 按相对路径检查，以下承诺产出文件尚未创建: "
+                          if _tp else "以下承诺产出文件尚未创建: ")
                 _miss_msg = (
-                    (f"本待办未完成（本步操作已成功，非操作失败）：对照任务目录 {_tp} 按相对路径检查，"
-                     "以下承诺产出文件尚未创建: " if _tp
-                     else "本待办未完成（非操作失败）：以下承诺产出文件尚未创建: ")
+                    _head
                     + ", ".join(_missing)
-                    + "。必须真实创建这些文件（写入磁盘）后本待办才算完成；"
+                    + "。这些文件必须真实写入磁盘；"
                     "已存在的文件不要重复创建，本轮只写上面缺失的文件；"
                     "若不属于本待办产出，就不要在思考/计划中提及它们。"
                 )

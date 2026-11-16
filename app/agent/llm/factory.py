@@ -14,6 +14,47 @@ from app.agent.llm.types import ModelConfig, ModelProvider, ChatRequest, LLMResp
 from app.agent.llm.router import ModelRouter
 from app.agent.llm.budget_manager import BudgetManager
 
+# ── 真实 usage 追踪（P1/P2，2026-11-14）─────────────────────────────
+# ① 每次 LLM 调用返回后用真实 prompt_tokens 校准 tiktoken 估算
+#    （calibrate 此前只有定义和测试、生产零调用点 → 比例恒 1.0）；
+# ② 按 scope 累计本 turn 计费量 {input, output, cost, calls, peak_in}，
+#    供 context_usage 事件对账 DeepSeek 后台账单。
+# scope 由 main_graph 每 turn 开始时 set_usage_scope(task_id or session_id)，
+# factory 侧优先取 scope（task_id 可能为 None 或残留上轮值），保证与 reset 同 key。
+# 全部 try/except 兜底：追踪失败绝不影响 LLM 调用本身。
+import contextvars
+
+_usage_scope: contextvars.ContextVar = contextvars.ContextVar(
+    "llm_usage_scope", default="")
+_TASK_USAGE: Dict[str, Dict[str, Any]] = {}
+_LAST_USAGE: Dict[str, Any] = {
+    "prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0}
+
+
+def set_usage_scope(scope: str) -> None:
+    """turn 开始时设定本 turn 的累计 key（task_id 优先，缺省 session_id）。"""
+    _usage_scope.set(scope or "")
+
+
+def reset_task_usage(scope: Optional[str] = None) -> None:
+    """清零某 scope 的累计（不传则用当前 scope；key 缺省回落 global）。"""
+    key = scope or _usage_scope.get() or "global"
+    _TASK_USAGE[key] = {"prompt_tokens": 0, "completion_tokens": 0,
+                        "cost": 0.0, "calls": 0, "peak_in": 0}
+
+
+def get_task_usage(scope: Optional[str] = None) -> Dict[str, Any]:
+    """读某 scope 的本 turn 累计（不传则用当前 scope）。"""
+    key = scope or _usage_scope.get() or "global"
+    return dict(_TASK_USAGE.get(key) or {"prompt_tokens": 0,
+                                         "completion_tokens": 0,
+                                         "cost": 0.0, "calls": 0, "peak_in": 0})
+
+
+def get_last_usage() -> Dict[str, Any]:
+    """最近一次 LLM 调用的真实 usage（跨 scope）。"""
+    return dict(_LAST_USAGE)
+
 
 class LLMFactory:
     """LLM 工厂类 - 统一管理所有模型提供商"""
@@ -125,6 +166,15 @@ class LLMFactory:
         if not selected_model:
             raise RuntimeError("没有可用的模型")
 
+        # 用户级 DeepSeek key（2026-11-14）：本 turn 用户填了自己的 key →
+        # 注入 request，provider 侧按 key 走用户自己的 client 计费。
+        # 未填（空串）→ 不注入，回落系统 key。
+        if selected_model.provider == ModelProvider.DEEPSEEK:
+            from app.agent.llm.user_api_key import get_user_api_key
+            _uk = get_user_api_key()
+            if _uk:
+                request.api_key = _uk
+
         estimated_cost = (selected_model.input_cost_per_1k + selected_model.output_cost_per_1k) / 2 * 1000
         allowed, status = await self.budget_manager.check_budget(estimated_cost)
 
@@ -143,6 +193,33 @@ class LLMFactory:
         async def _do_chat():
             nonlocal provider, request
             result = await provider.chat(request)
+            try:
+                # P1（2026-11-14）：真实 usage → 校准估算 + 本 turn 计费累计。
+                # 追踪任何一步失败都只跳过追踪，绝不影响调用返回。
+                u = result.usage or {}
+                pi = int(u.get("prompt_tokens") or 0)
+                co = int(u.get("completion_tokens") or 0)
+                if pi > 0:
+                    from app.agent.context.budget import calibrate, count_tokens
+                    est = 0
+                    for m in request.messages:
+                        est += count_tokens(
+                            getattr(m, "content", "") or "", calibrated=False)
+                    calibrate(pi, max(est, 1))
+                key = _usage_scope.get() or task_id or "global"
+                acc = _TASK_USAGE.setdefault(
+                    key, {"prompt_tokens": 0, "completion_tokens": 0,
+                          "cost": 0.0, "calls": 0, "peak_in": 0})
+                acc["prompt_tokens"] += pi
+                acc["completion_tokens"] += co
+                acc["cost"] = float(acc.get("cost") or 0.0) + float(result.cost or 0.0)
+                acc["calls"] += 1
+                acc["peak_in"] = max(int(acc.get("peak_in") or 0), pi)
+                _LAST_USAGE.update({"prompt_tokens": pi,
+                                    "completion_tokens": co,
+                                    "cost": float(result.cost or 0.0)})
+            except Exception:  # noqa: BLE001 - 用量追踪永不阻塞 LLM 调用
+                pass
             await budget_manager.record_usage(result.cost)
             return result
 

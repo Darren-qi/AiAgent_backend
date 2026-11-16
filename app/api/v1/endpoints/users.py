@@ -20,6 +20,8 @@ from app.schemas.user import (
     UserUpdate,
     UserPasswordUpdate,
     UserAdminUpdate,
+    UserLLMKeyUpdate,
+    LLMKeyStatus,
 )
 from app.schemas.common import (
     PageMeta,
@@ -70,6 +72,60 @@ async def get_users(
 
 
 @router.get(
+    "/profile/llm-key",
+    response_model=LLMKeyStatus,
+    summary="获取 DeepSeek Key 状态",
+    description="获取当前用户自己的 DeepSeek API Key 配置状态（只回掩码，不回全文）。",
+)
+async def get_llm_key(
+    db: DBSession,
+    current_user: CurrentUser,
+) -> LLMKeyStatus:
+    """获取当前用户的 DeepSeek Key 状态"""
+    user_service = UserService(db)
+    user = await user_service.get_user_by_id(current_user["id"])
+    key = (user.deepseek_api_key if user else "") or ""
+    from app.agent.llm.user_api_key import mask_key
+    return LLMKeyStatus(configured=bool(key), masked=mask_key(key) or None)
+
+
+@router.put(
+    "/profile/llm-key",
+    response_model=LLMKeyStatus,
+    summary="保存/清除 DeepSeek Key",
+    description="保存当前用户自己的 DeepSeek API Key（保存前用 DeepSeek /models 验证）；"
+                "api_key 传空串表示清除、回落系统 Key。",
+)
+async def put_llm_key(
+    key_data: UserLLMKeyUpdate,
+    db: DBSession,
+    current_user: CurrentUser,
+) -> LLMKeyStatus:
+    """保存或清除当前用户的 DeepSeek Key"""
+    from app.agent.llm.user_api_key import mask_key, validate_deepseek_key
+
+    key = (key_data.api_key or "").strip()
+    if key:
+        # 验证失败以 200 + error 返回（前端拦截器只读 message 字段，
+        # 抛 400 会丢掉「Key 无效」这类具体原因）
+        ok, msg = await validate_deepseek_key(key)
+        if not ok:
+            return LLMKeyStatus(configured=False, masked=None, error=msg)
+
+    user_service = UserService(db)
+    user = await user_service.get_user_by_id(current_user["id"])
+    if user is None:
+        raise BadRequestException(detail="用户不存在")
+    user.deepseek_api_key = key or None
+    await db.commit()
+    await db.refresh(user)
+    return LLMKeyStatus(configured=bool(key), masked=mask_key(key) or None)
+
+
+# 注意：/profile/llm-key 必须注册在 /profile/{user_id} 之前——
+# FastAPI 按路径正则先命中 {user_id}，随后 int 转换失败返回 422，
+# 不会继续匹配后面的静态路由（本地 e2e 实测 GET /profile/llm-key 422）。
+@router.get(
     "/profile/{user_id}",
     response_model=UserResponse,
     summary="获取用户公开资料",
@@ -107,7 +163,7 @@ async def update_current_user(
     只能更新自己的信息。
     """
     user_service = UserService(db)
-    user = await user_service.update_user(current_user.id, user_data)
+    user = await user_service.update_user(current_user["id"], user_data)
 
     return UserResponse.model_validate(user)
 
@@ -130,7 +186,7 @@ async def change_password(
     """
     user_service = UserService(db)
     await user_service.update_password(
-        user_id=current_user.id,
+        user_id=current_user["id"],
         old_password=password_data.old_password,
         new_password=password_data.new_password,
     )
