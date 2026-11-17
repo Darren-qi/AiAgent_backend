@@ -39,11 +39,13 @@
 | 生产 | `{"error": "服务器内部错误", "error_code": "INTERNAL_ERROR"}`（脱敏） |
 | 开发 | 追加 `"detail": str(exc)` 与 `"type"` 类型名 |
 
-### 1.4 存量裸 HTTPException（无 error_code）
+### 1.4 存量裸 HTTPException（已清零，2026-11-17）
 
-FastAPI 默认形态 `{"detail": "..."}`，主要来自 endpoints 层 ~20 处直接
-`raise HTTPException(...)`。**新代码禁止引入**，逐步迁移到 AppException 子类。
-典型 detail 文案见 §4。
+FastAPI 默认形态 `{"detail": "..."}` 曾来自 endpoints/deps 层 20 处直接
+`raise HTTPException(...)`（deps 5 / agent 14 / auth 1）——**已全部迁移**为
+AppException 子类（§2 分类表），响应回统一信封 `{error, status_code, error_code}`；
+401 的 `WWW-Authenticate` 头经 `headers` 参数保留。前端错误读取兜底同步增加
+`.data.error`（FilePreview / agent index）。**新代码禁止引入裸 HTTPException**。
 
 ## 2. 错误码总表（AppException 体系）
 
@@ -88,18 +90,21 @@ FastAPI 默认形态 `{"detail": "..."}`，主要来自 endpoints 层 ~20 处直
 | `INTERNAL_ERROR` | `InternalServerException` | 500 | 服务器内部错误 | 未预期错误（通常走兜底 handler） |
 | `SERVICE_UNAVAILABLE` | `ServiceUnavailableException` | 503 | 服务暂时不可用 | 依赖不可用；`extra.retry_after` 可带建议重试秒数（如会话创建失败 503） |
 
-## 3. 依赖注入层 401/403（deps.py，无 error_code）
+## 3. 依赖注入层 401/403（deps.py，已迁 AppException，2026-11-17）
 
-`app/api/deps.py` 抛的是裸 `HTTPException`（带 `WWW-Authenticate: Bearer`）：
+`app/api/deps.py` 抛 AppException 子类（401 带 `WWW-Authenticate: Bearer` 头，
+`error_code` 进统一信封）：
 
-| HTTP | detail 文案 | 条件 |
-|---|---|---|
-| 401 | 请先登录 | 未携带 Authorization |
-| 401 | 无效的访问令牌 | token 校验失败/过期/`sub` 缺失 |
-| 401 | 用户身份无法映射，请重新登录 | token 有效但用户查不到 |
-| 403 | （CurrentAdminUser 默认） | 已登录但 `role != "admin"` |
+| HTTP | error_code | 文案 | 条件 |
+|---|---|---|---|
+| 401 | `UNAUTHORIZED` | 请先登录 / 用户身份无法映射，请重新登录 | 未携带 Authorization / token 有效但用户查不到 |
+| 401 | `INVALID_TOKEN` | 无效的访问令牌 / 令牌中缺少用户标识 | token 校验失败/过期/`sub` 缺失 |
+| 403 | `INSUFFICIENT_PERMISSIONS` | 需要管理员权限 | 已登录但 `role != "admin"` |
 
-## 4. 存量 HTTPException 典型文案（逐步迁移）
+> `get_current_user_optional` 对上述异常返回 None（可选认证语义不变，
+> AppException 继承 HTTPException 故原 `except HTTPException` 仍兜住）。
+
+## 4. HTTPException 典型文案（已迁移至 AppException，留档对照）
 
 | HTTP | detail | 位置示例 |
 |---|---|---|

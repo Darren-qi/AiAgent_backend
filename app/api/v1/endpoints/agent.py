@@ -23,6 +23,13 @@ from app.agent.task_executor import task_manager
 from app.security.input_guard import InputGuard
 from app.security.output_guard import OutputGuard
 from app.models.experience import SessionModel
+from app.core.exceptions import (
+    BadRequestException,
+    ForbiddenException,
+    NotFoundException,
+    ServiceUnavailableException,
+    UnauthorizedException,
+)
 
 router = APIRouter()
 
@@ -181,7 +188,7 @@ async def execute_task(
                 logger.debug(f"[Agent] 会话已存在: {session_id}")
     except Exception as e:
         logger.error(f"[Agent] 创建会话记录失败（显式报错，不再静默降级）: {e}")
-        raise HTTPException(status_code=503, detail="会话创建失败，请稍后重试")
+        raise ServiceUnavailableException(detail="会话创建失败，请稍后重试")
 
     graph = AgentGraph()
     result = await graph.execute(
@@ -279,7 +286,7 @@ async def execute_task_stream(
         import traceback
         logger.error(f"[Agent] 创建会话记录失败（显式报错，不再静默降级）: {e}")
         logger.error(f"[Agent] 完整错误: {traceback.format_exc()}")
-        raise HTTPException(status_code=503, detail="会话创建失败，请稍后重试")
+        raise ServiceUnavailableException(detail="会话创建失败，请稍后重试")
 
     # 初始化 MemoryManager，传入数据库会话（这样 conversation_messages 会被保存）
     if session_id not in memory_managers:
@@ -982,7 +989,7 @@ async def create_session(
     except Exception as e:
         # 落库失败必须显式报错——静默返 200 会"看似建好、刷新全丢"（2026-11-10 线上根因）
         logger.error(f"[Agent] 保存会话到数据库失败（显式报错，不再静默降级）: {e}")
-        raise HTTPException(status_code=503, detail="会话创建失败，请稍后重试")
+        raise ServiceUnavailableException(detail="会话创建失败，请稍后重试")
 
     sessions_store[session_id] = session_data
     session_task_paths[session_id] = task_folder
@@ -1050,20 +1057,20 @@ async def rename_session(session_id: str, body: SessionRenameIn,
     """重命名会话（前端左侧列表）：未登录 401，非管理员只能改自己的会话。"""
     title = (body.title or "").strip()
     if not title:
-        raise HTTPException(status_code=400, detail="会话名称不能为空")
+        raise BadRequestException(detail="会话名称不能为空")
     if len(title) > 200:
-        raise HTTPException(status_code=400, detail="会话名称过长")
+        raise BadRequestException(detail="会话名称过长")
     if user is None:
-        raise HTTPException(status_code=401, detail="请先登录")
+        raise UnauthorizedException(detail="请先登录")
     try:
         from sqlalchemy import select, update
         async with AsyncSessionLocal() as db:
             row = (await db.execute(select(SessionModel).where(
                 SessionModel.session_id == session_id))).scalar_one_or_none()
             if row is None:
-                raise HTTPException(status_code=404, detail="会话不存在")
+                raise NotFoundException(resource="会话")
             if user.get("role") != "admin" and row.user_id != user.get("id"):
-                raise HTTPException(status_code=403, detail="无权操作该会话")
+                raise ForbiddenException(detail="无权操作该会话")
             # 不动 updated_at：重命名不是活动，避免会话排序被打乱
             await db.execute(update(SessionModel).where(
                 SessionModel.session_id == session_id).values(title=title))
@@ -1072,7 +1079,7 @@ async def rename_session(session_id: str, body: SessionRenameIn,
         raise
     except Exception as e:  # noqa: BLE001 - 落库失败显式报错，不静默降级
         logger.warning(f"[Agent] 重命名会话失败: {e}")
-        raise HTTPException(status_code=503, detail="重命名失败，请稍后重试")
+        raise ServiceUnavailableException(detail="重命名失败，请稍后重试")
     return {"code": 200, "message": "success",
             "data": {"session_id": session_id, "title": title}}
 
@@ -1093,7 +1100,7 @@ def _safe_file(file_path: str):
     p = Path(file_path)
     p = (p if p.is_absolute() else root / p).resolve()
     if p != root and root not in p.parents:
-        raise HTTPException(status_code=400, detail="路径越界")
+        raise BadRequestException(detail="路径越界")
     return p
 
 
@@ -1102,9 +1109,9 @@ async def read_file(file_path: str):
     """读任务目录内文件内容（供右侧预览）。"""
     p = _safe_file(file_path)
     if not p.exists():
-        raise HTTPException(status_code=404, detail="文件不存在")
+        raise NotFoundException(resource="文件")
     if p.is_dir():
-        raise HTTPException(status_code=400, detail="是目录，不是文件")
+        raise BadRequestException(detail="是目录，不是文件")
     content = p.read_text(encoding="utf-8", errors="replace")
     return {"code": 0, "message": "ok",
             "data": {"path": file_path, "content": content[:200000],
@@ -1131,7 +1138,7 @@ async def download_file(file_path: str):
     from fastapi.responses import FileResponse
     p = _safe_file(file_path)
     if not p.is_file():
-        raise HTTPException(status_code=404, detail="文件不存在")
+        raise NotFoundException(resource="文件")
     return FileResponse(p, filename=p.name)
 
 
@@ -1143,7 +1150,7 @@ async def download_dir(dir: str):
     from fastapi.responses import StreamingResponse
     p = _safe_file(dir)
     if not p.is_dir():
-        raise HTTPException(status_code=400, detail="不是目录")
+        raise BadRequestException(detail="不是目录")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for f in sorted(p.rglob("*")):

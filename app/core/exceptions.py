@@ -91,11 +91,14 @@ class TokenExpiredException(AppException):
 class InvalidTokenException(AppException):
     """无效令牌异常（401）"""
 
-    def __init__(self, detail: str = "无效的令牌"):
+    def __init__(self, detail: str = "无效的令牌", **kwargs):
+        # **kwargs 透传 headers（如 WWW-Authenticate: Bearer）——阶段修复：
+        # deps.py 裸 HTTPException 迁移需要带响应头
         super().__init__(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=detail,
             error_code="INVALID_TOKEN",
+            **kwargs,
         )
 
 

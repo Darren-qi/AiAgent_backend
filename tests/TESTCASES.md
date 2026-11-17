@@ -149,6 +149,7 @@
 | TC-S12-05 | ⏸ 注册/登录全量/帖子/用户管理 27 条：缺 client fixture 且会写真实库，启用前先建隔离测试库 | test_auth/test_posts/test_users | ⏸ |
 | TC-S12-06 | ⏸ 登录成功(有账号)用例：依赖真实库已有 testuser（本地碰巧有=环境假绿） | test_endpoints（TestAuthEndpoint 2条） | ⏸ |
 | TC-S12-07 | 阶段六·回放补字段：get-session 过程卡 next_moves 带 duration_ms/error_code、全步骤带 created_at（meta_data 组装链路已落库） | 手动核对接口返回（组装逻辑在 agent.py 闭包内，无单测面） | 🟡 |
+| TC-S12-08 | 统一错误信封：裸 HTTPException 清零（deps5/agent14/auth1 → AppException 子类），401 返回 `{error, error_code: UNAUTHORIZED}` 无 `detail` 且带 `WWW-Authenticate: Bearer` 头；前端错误读取兜底增 `.data.error` | test_endpoints::test_agent_execute_without_auth（信封断言）+ 全仓 `raise HTTPException` grep 归零 | ✅ |
 
 ## S13 周边服务（通知/存储/社交/用户）
 

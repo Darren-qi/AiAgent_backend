@@ -86,7 +86,7 @@
       `requirements.txt`（✅ 2026-11-17：双 Dockerfile 改 `pip install .`、删
       requirements.txt、compose context `./backend`→`.`、新增 .dockerignore，
       `pip install --dry-run .` 验证通过；镜像构建待有 docker 环境复核）；
-- [ ] endpoints 中 ~20 处裸 `HTTPException` 分批迁移 `AppException` 子类；
+- [x] endpoints 中 ~20 处裸 `HTTPException` 分批迁移 `AppException` 子类（✅ 2026-11-17：20 处全迁 deps5/agent14/auth1，`raise HTTPException` grep 归零，401 保留 WWW-Authenticate 头，前端兜底增 `.data.error`，error-codes §1.4/§3/§4 同步）；
 - [ ] `app/api/v1/router.py` 死代码清理（或恢复为唯一挂载方式，二选一收口）；
 - [ ] AutoGen 后端（:8001）ContextManager 二期评估（`CONTEXT_MANAGER_PLAN.md` §8）。
 

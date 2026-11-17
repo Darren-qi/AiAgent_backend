@@ -85,7 +85,11 @@ class TestAgentEndpoint:
 
     @pytest.mark.asyncio
     async def test_agent_execute_without_auth(self):
-        """测试未认证 Agent 执行"""
+        """测试未认证 Agent 执行——统一错误信封（阶段修复 2026-11-17）。
+
+        裸 HTTPException 迁移后：body 是 {error, status_code, error_code}
+        而非 {detail}，且 401 保留 WWW-Authenticate 响应头。
+        """
         from app.main import app
 
         async with AsyncClient(
@@ -97,6 +101,10 @@ class TestAgentEndpoint:
                 json={"task": "Say hello", "context": {}}
             )
             assert response.status_code == 401
+            body = response.json()
+            assert body.get("error_code") == "UNAUTHORIZED", body
+            assert "error" in body and "detail" not in body, body
+            assert response.headers.get("WWW-Authenticate") == "Bearer"
 
 
 class TestConversationEndpoint:

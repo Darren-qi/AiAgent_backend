@@ -16,6 +16,10 @@ from sqlalchemy.exc import IntegrityError
 
 from app.db.session import get_db, AsyncSessionLocal
 from app.core.security import verify_access_token
+from app.core.exceptions import (
+    UnauthorizedException, InvalidTokenException,
+    InsufficientPermissionsException,
+)
 from app.models.user import User
 
 
@@ -124,8 +128,7 @@ async def get_current_user(
     适用于需要认证的路由。
     """
     if credentials is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+        raise UnauthorizedException(
             detail="请先登录",
             headers={"WWW-Authenticate": "Bearer"},
         )
@@ -134,16 +137,14 @@ async def get_current_user(
     payload = verify_access_token(token)
 
     if payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+        raise InvalidTokenException(
             detail="无效的访问令牌",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     user_id = payload.get("sub")
     if user_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+        raise InvalidTokenException(
             detail="令牌中缺少用户标识",
             headers={"WWW-Authenticate": "Bearer"},
         )
@@ -151,8 +152,7 @@ async def get_current_user(
     lg_user_id = await _resolve_user_id(db, payload)
     if lg_user_id is None:
         # 身份无法映射（建号失败等）：按鉴权失败处理，避免静默落匿名丢数据
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+        raise UnauthorizedException(
             detail="用户身份无法映射，请重新登录",
             headers={"WWW-Authenticate": "Bearer"},
         )
@@ -195,10 +195,7 @@ async def get_current_admin_user(
     验证当前用户是否具有管理员权限。
     """
     if current_user.get("role") != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="需要管理员权限",
-        )
+        raise InsufficientPermissionsException(detail="需要管理员权限")
     return current_user
 
 

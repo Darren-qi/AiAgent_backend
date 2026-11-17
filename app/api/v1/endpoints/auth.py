@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DBSession, CurrentUser
+from app.core.exceptions import UnauthorizedException
 from app.schemas.user import UserCreate, UserResponse
 from app.schemas.token import Token, TokenRefreshRequest
 from app.schemas.common import SuccessResponse
@@ -60,5 +61,5 @@ async def get_current_user_info(
     user_service = UserService(db)
     user = await user_service.get_user_by_id(current_user["id"])
     if user is None:
-        raise HTTPException(status_code=401, detail="用户不存在，请重新登录")
+        raise UnauthorizedException(detail="用户不存在，请重新登录")
     return UserResponse.model_validate(user)
