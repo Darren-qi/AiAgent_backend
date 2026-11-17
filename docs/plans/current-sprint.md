@@ -82,8 +82,10 @@
 ## 待办 / 下一步
 
 - [x] 本批改动跑全量门禁 `.venv/bin/python run_golden.py`，退出码 0 后提交 A–E（✅ 2026-11-17：`36477e1` 提交，后续门禁持续全绿至 229 passed）；
-- [ ] Dockerfile 改用 `pyproject.toml` 安装（`pip install .`），清理 Flask 残留
-      `requirements.txt`（见 [../architecture/overview.md](../architecture/overview.md) §7）；
+- [x] Dockerfile 改用 `pyproject.toml` 安装（`pip install .`），清理 Flask 残留
+      `requirements.txt`（✅ 2026-11-17：双 Dockerfile 改 `pip install .`、删
+      requirements.txt、compose context `./backend`→`.`、新增 .dockerignore，
+      `pip install --dry-run .` 验证通过；镜像构建待有 docker 环境复核）；
 - [ ] endpoints 中 ~20 处裸 `HTTPException` 分批迁移 `AppException` 子类；
 - [ ] `app/api/v1/router.py` 死代码清理（或恢复为唯一挂载方式，二选一收口）；
 - [ ] AutoGen 后端（:8001）ContextManager 二期评估（`CONTEXT_MANAGER_PLAN.md` §8）。

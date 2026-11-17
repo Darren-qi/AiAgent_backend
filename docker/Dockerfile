@@ -15,14 +15,13 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制依赖文件
-COPY requirements.txt .
-
-# 安装 Python 依赖
-RUN pip install --no-cache-dir -r requirements.txt
-
-# 复制应用代码
+# 依赖以 pyproject.toml 为准（2026-11-17 修复：此前装过时 Flask 栈
+# requirements.txt，镜像缺 fastapi/uvicorn 无法运行）
+COPY pyproject.toml README.md ./
 COPY app/ ./app/
+RUN pip install --no-cache-dir .
+
+# 复制运行期文件
 COPY config.py .
 COPY run.py .
 

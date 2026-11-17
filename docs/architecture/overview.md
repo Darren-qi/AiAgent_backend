@@ -297,19 +297,20 @@ event_stream() 循环：queue 取事件 yield；30s 无事件发 heartbeat；
 | `stopped` | 用户 abort / 前端断连中断 | `failed`（"任务被取消"） |
 | `heartbeat` | 30s 保活 | — |
 
-## 7. 已知配置漂移（重要）
+## 7. 配置漂移（已修复，2026-11-17）
 
-**系统是 FastAPI，不是 Flask。** 但根目录 `requirements.txt` 残留旧 Flask 栈：
+**系统是 FastAPI，不是 Flask。** 历史漂移（已修复，留档防回潮）：
 
-```
-Flask==2.3.3 / Flask-SQLAlchemy==3.0.5 / Flask-Login==0.6.2 ...
-```
-
-- 真实依赖以 **`pyproject.toml`** 为准（fastapi / langgraph / sqlalchemy[asyncio]…）；
-- 本地开发用 `.venv` + `pyproject.toml`，一切正常；
-- **`Dockerfile` 却 `pip install -r requirements.txt`** → 按现 Dockerfile 构建的镜像
-  装的是 Flask 栈、缺少 FastAPI/LangGraph，无法运行 `uvicorn app.main:app`。
-  修复方向：Dockerfile 改为 `pip install .`（或 `uv sync`），并清理过时 requirements.txt。
+- 曾经：根目录 `requirements.txt` 残留旧 Flask 栈（Flask==2.3.3…），
+  两个 `Dockerfile` 都 `pip install -r requirements.txt` → 镜像装的是 Flask、
+  缺 FastAPI/LangGraph，`uvicorn app.main:app` 根本起不来；
+  `docker-compose.yml` 的 build context 指向不存在的 `./backend`。
+- **现在**：依赖唯一来源 = **`pyproject.toml`**；根/Dockerfile 与 docker/Dockerfile
+  均改 `pip install .`；`requirements.txt` 已删除；compose context 改 `.`；
+  新增 `.dockerignore`（`.venv`/`.env`/`logs`/`tasks` 不进镜像，密钥经
+  compose `env_file` 注入）。
+- 验证：`pip install --dry-run .` 元数据与依赖解析通过（本机无 docker，
+  镜像构建待有 docker 的环境跑一次 `docker compose build` 复核）。
 
 ## 8. 关键文件索引
 

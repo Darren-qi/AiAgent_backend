@@ -3,7 +3,9 @@ version: '3.8'
 services:
   backend:
     build:
-      context: ./backend
+      # 2026-11-17 修复：原 ./backend 在本仓库不存在，compose build 找不到
+      # Dockerfile；Dockerfile 在仓库根，依赖以 pyproject.toml 为准
+      context: .
       dockerfile: Dockerfile
     container_name: aiagent-backend
     ports:
@@ -14,7 +16,7 @@ services:
       - LOG_LEVEL=INFO
       - DEBUG=false
     env_file:
-      - ./backend/.env
+      - ./.env
     depends_on:
       - postgres
       - redis
