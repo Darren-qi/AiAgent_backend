@@ -885,12 +885,16 @@ class AgentGraph:
                     from app.agent.llm.factory import (
                         get_task_usage, get_last_usage)
                     _max = self._ctx_mgr.cfg.max_tokens
-                    # 11-13：报本轮真实峰值（接续 floor），不再用重建片段 budget.used
+                    _tu = get_task_usage()
+                    # 11-13：报本轮真实峰值（接续 floor），不再用重建片段 budget.used。
+                    # 收尾必须回读 _tu.peak_in：_ctx_peak 只在 step 事件时更新，
+                    # 最后一个 step 事件之后的 LLM 调用（如 integrator 收尾）
+                    # 峰值增量会漏，且下一轮 floor 继承丢过之后的值补不回来。
                     _used = max(
                         getattr(self, "_ctx_peak", 0),
                         getattr(self, "_ctx_floor", 0),
+                        int(_tu.get("peak_in") or 0),
                     )
-                    _tu = get_task_usage()
                     _payload = {
                         "used": _used,
                         "max": _max,
@@ -1413,7 +1417,10 @@ class AgentGraph:
                                 _used_u = max(self._ctx_floor, _real_peak) \
                                     if _real_peak \
                                     else max(self._ctx_floor, _est_u)
-                                if _used_u > self._ctx_peak:
+                                # _ctx_peak 只收真实 usage 峰值：est 只估
+                                # thought_context（缺系统提示词/工具清单），
+                                # 不得经此写进 turn 收尾落库，污染下一轮 floor。
+                                if _real_peak and _used_u > self._ctx_peak:
                                     self._ctx_peak = _used_u
                                 on_step("context_usage", {
                                     "used": _used_u,
