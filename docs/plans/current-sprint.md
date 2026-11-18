@@ -118,11 +118,45 @@
 - 真实 PG 探针（跑完即清理）：CAS 首插/正常递增/冲突返回 0/旧行无 version 兼容 全过；journal running→done→fresh replay→ambiguous→verify True/False→purge_session 全链路全过。
 - ⚠️ 墙钟时间：全量 286s，其中 `test_billed_accumulates_across_turns` 与 `test_agent.py` 三个 graph 用例占大头；同一条代码在不同次运行里 20s~150s 都出现过（user CPU 仅 2s，纯外部等待），**无证据表明与本批改动有因果关系**，已排除 `create` 落库这一项后仍复现。
 
+## I. 会话删除级联清理（子表 + 磁盘任务目录）（2026-11-18）
+
+### 背景（生产实测）
+前端会话列表删除走 `DELETE /api/v1/agent/execute/?task_id=<session_id>`（`src/api/agent.js`
+`session.delete` → `agent/index.vue:622`），旧实现**只删 sessions 一行**：子表与磁盘任务目录全留。
+齐芸禾（uid=3，`qi.yunhe`）33 个测试会话实测遗留：execution_nodes 2028、session_files 476、
+conversation_messages 115、session_contexts 48、working_memory 32、tasks 32，磁盘任务目录 31 个。
+
+### 改动
+- 新增 `app/agent/session_cleanup.py`：`cleanup_session()` = 收集目录名 → 删子表 →
+  （可选）删 sessions 行 → `commit()` → 删磁盘目录。**先收集后删行**（目录映射在子表里）。
+  - 目录映射两路：`session_contexts.context_key='task_path'`（权威）+
+    `session_files.absolute_path` 的 `/tasks/<目录>/<文件>` 段兜底
+  - 子表清单从 `information_schema` **动态发现**（schema 驱动，新子表自动覆盖），
+    表名过 `^[a-z][a-z0-9_]*$` 才拼进 SQL；`sessions` 排除在外由调用方决定
+  - 磁盘删除逐条校验：名字无 `/`、非 `.`/`..`、`resolve()` 后父目录必须叫 `tasks`、
+    必须是目录、symlink 指到外面则跳过（防路径穿越/防顺手删目标）
+  - **共享目录保护**：候选目录若被其它会话的 `task_path` 引用 → 跳过不删
+  - 磁盘删除放在 `commit()` 之后：DB 失败可回滚重试，磁盘删了就没了
+- `agent.py::delete_session_by_query` 改调 `cleanup_session(db, task_id, delete_parent=True)`，
+  清理结果打日志；清理失败仍返回 200（与旧实现同级降级，不让删除按钮报错）
+
+### 验证
+- `tests/test_agent/test_session_cleanup.py` 15 用例（解析/路径安全/动态子表/编排/共享目录）
+- `tests/test_api/test_session_delete.py` 2 用例（端点确实调用 cleanup + 清理失败不 500）
+- 生产清理实录（先备份后删）：DB 2754 行 + 磁盘 31 个目录，10 张表验证全 0、
+  `tasks/` 74 → 43 个目录；备份 `/home/ubuntu/aiagent_backups/20261118_220652`
+  （`db_*.json` + `tasks_dirs.tar.gz`）
+
+### 未覆盖
+- `session.py::DELETE /{session_id}`（只删内存 dict 的旧接口，前端不用）未接级联
+- 未做「启动时扫孤儿目录」的兜底（历史遗留的 42 个非本用户目录未动）
+
 ## 迭代记录
 
 | 日期 | 内容 |
 |---|---|
-| 2026-11-18 | **阶段八**：写操作幂等（action_journal WAL + 语义白名单 + 原子写）+ 断点可靠性（version 乐观锁 / save 失败上报 / pending_action 写前快照 / TaskManager 终态落库）；289 passed |
+| 2026-11-18 | **会话级联清理**：删会话时一并删子表（information_schema 动态发现）+ 磁盘任务目录（路径校验/共享目录跳过）；生产清齐芸禾测试数据 2754 行 + 31 目录（已备份）；17 用例 |
+| 2026-11-18 | **阶段八**：写操作幂等（action_journal WAL + 语义白名单 + 原子写）+ 断点可靠性（version 乐观锁 / save 失败上报 / pending_action 写前快照 / TaskManager 终态落库）；292 passed |
 | 2026-11-17 | A–E 随 `36477e1` 提交；工具层 Harness 七阶段全部交付（`2eedc48`→`1c8625c` 共 5 个 feat commit），门禁 229 passed 全绿 |
 | 2026-11-16 | 建立 docs 七件套；整理未提交改动为 A–E 五条主线 |
 | 2026-11-14 | 断点续跑、planner 参数守卫、usage 计费三线开工（生产现场驱动） |

@@ -1027,10 +1027,15 @@ async def delete_session_by_query(
 
     try:
         async with AsyncSessionLocal() as db:
-            from sqlalchemy import delete
-            stmt = delete(SessionModel).where(SessionModel.session_id == task_id)
-            await db.execute(stmt)
-            await db.commit()
+            # 级联清理：子表（session_files/execution_nodes/working_memory ...）+
+            # 磁盘任务目录 tasks/<项目_时间戳>/，否则删了会话会留下大量垃圾
+            from app.agent.session_cleanup import cleanup_session
+            outcome = await cleanup_session(db, task_id, delete_parent=True)
+        if outcome["dirs"]:
+            logger.info(f"[Agent] 会话 {task_id} 删除，级联清理磁盘任务目录 "
+                        f"{len(outcome['dirs'])} 个")
+        if outcome["tables"]:
+            logger.info(f"[Agent] 会话 {task_id} 删除，级联清理子表行: {outcome['tables']}")
     except Exception as e:
         logger.warning(f"[Agent] 删除会话失败: {e}")
 
