@@ -256,26 +256,87 @@ class PostgresSaver:
         session_id: str,
         memory_key: str,
         memory_value: Any,
+        expected_version: Optional[int] = None,
     ) -> int:
-        """保存或更新工作记忆"""
-        stmt = insert(WorkingMemory).values(
+        """保存或更新工作记忆
+
+        expected_version（阶段八 P1 乐观锁）：
+            None  → 原 upsert 语义（无条件覆盖，向后兼容）。
+            int   → 只有库里 memory_value->>'version' 等于该值才更新；
+                    不相等=并发覆盖（两个写者互相踩），**不写**并返回 0，
+                    由调用方决定是采纳新 base 重试还是上报。
+                    旧行没有 version 键按 0 处理。
+        """
+        value = (
+            memory_value
+            if isinstance(memory_value, dict)
+            else {"value": memory_value}
+        )
+
+        if expected_version is None:
+            stmt = insert(WorkingMemory).values(
+                session_id=session_id,
+                memory_key=memory_key,
+                memory_value=value,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["session_id", "memory_key"],
+                set_={
+                    "memory_value": stmt.excluded.memory_value,
+                    "deleted_at": None,
+                },
+            )
+            result = await self._session.execute(stmt)
+            await self._session.commit()
+            logger.info(f"[PostgresSaver] 保存工作记忆: session={session_id}, key={memory_key}")
+            return result.inserted_primary_key[0] if result.inserted_primary_key else 0
+
+        # ---- 乐观锁 CAS ----
+        ver_col = WorkingMemory.memory_value["version"].as_string()
+        version_cond = (
+            ver_col.is_(None)
+            if int(expected_version) == 0
+            else ver_col == str(int(expected_version))
+        )
+        upd = (
+            update(WorkingMemory)
+            .where(
+                WorkingMemory.session_id == session_id,
+                WorkingMemory.memory_key == memory_key,
+                WorkingMemory.deleted_at.is_(None),
+                version_cond,
+            )
+            .values(memory_value=value, deleted_at=None)
+        )
+        res = await self._session.execute(upd)
+        if int(getattr(res, "rowcount", 0) or 0):
+            await self._session.commit()
+            return 1
+
+        # 走到这里 = 行不存在 / 软删行 / 版本不匹配（并发覆盖）
+        ins = insert(WorkingMemory).values(
             session_id=session_id,
             memory_key=memory_key,
-            memory_value=memory_value
-            if isinstance(memory_value, dict)
-            else {"value": memory_value},
+            memory_value=value,
         )
-        stmt = stmt.on_conflict_do_update(
+        ins = ins.on_conflict_do_update(
             index_elements=["session_id", "memory_key"],
             set_={
-                "memory_value": stmt.excluded.memory_value,
+                "memory_value": ins.excluded.memory_value,
                 "deleted_at": None,
             },
+            # 只在"软删行"上复活；活行的冲突说明并发覆盖，WHERE 不成立 → 不动
+            where=WorkingMemory.deleted_at.isnot(None),
         )
-        result = await self._session.execute(stmt)
+        res2 = await self._session.execute(ins)
         await self._session.commit()
-        logger.info(f"[PostgresSaver] 保存工作记忆: session={session_id}, key={memory_key}")
-        return result.inserted_primary_key[0] if result.inserted_primary_key else 0
+        n = int(getattr(res2, "rowcount", 0) or 0)
+        if not n:
+            logger.warning(
+                f"[PostgresSaver] 版本冲突，未写入: session={session_id}, "
+                f"key={memory_key}, expected_version={expected_version}"
+            )
+        return n
 
     async def get_working(
         self,

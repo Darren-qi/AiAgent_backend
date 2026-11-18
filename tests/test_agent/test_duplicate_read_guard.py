@@ -21,6 +21,7 @@ class _LoaderSpy:
         self.calls = []
 
     async def execute(self, action, params):
+        params.pop("_op_ctx", None)  # 真 loader 会摘走（阶段八意图日志）
         self.calls.append((action, dict(params)))
         return SimpleNamespace(metadata={}, success=True,
                                data={"ok": True}, error=None)
@@ -30,6 +31,7 @@ def _graph() -> AgentGraph:
     g = AgentGraph.__new__(AgentGraph)
     g._session_id = "test_session"
     g._readback_guard = {}
+    g._task_id = None  # 执行前注入 _op_ctx 要读（真实对象由 __init__ 提供）
     return g
 
 

@@ -270,6 +270,10 @@ class AgentGraph:
         # turn 边界 _reset_readback_turn() 全清（跨 turn 上下文是摘要）
         self._readback_guard: Dict[str, Dict[str, Any]] = {}
         self._state_manager: Optional[ExecutionStateManager] = None  # 执行状态管理器
+        # 断点写失败上报通道（阶段八 P1）：ExecutionStateManager → SSE on_step。
+        # 前端未订阅 checkpoint_error 事件时 emit 是 no-op，不影响现有 UI。
+        self._ckpt_on_step: Optional[Callable[[str, Dict[str, Any]], None]] = None
+        self._ckpt_fail_count: int = 0
 
     def _reset_readback_turn(self, session_id: Optional[str] = None) -> None:
         """新对话轮开始：清空该会话的读回守卫状态。
@@ -329,6 +333,29 @@ class AgentGraph:
             )
             # 绑定 TaskManager 中断检查（使用实例属性引用，避免闭包变量捕获问题）
             self._state_manager.set_running_check(self._task_id_checker)
+            # 阶段八 P1：断点写失败不再只写日志，转成 checkpoint_error 事件
+            self._state_manager.on_checkpoint_error = self._report_checkpoint_error
+
+    def _report_checkpoint_error(self, reason: str, info: Optional[Dict[str, Any]] = None) -> None:
+        """断点写失败上报（阶段八 P1）。
+
+        save_state 失败=断点没落库，下次恢复会回到更早进度；以前只有日志，
+        这里补一条结构化事件（最多 3 条/轮，避免 DB 故障时刷屏）。
+        """
+        self._ckpt_fail_count += 1
+        logger.error(
+            "[checkpoint_error] #%d %s: %s",
+            self._ckpt_fail_count, reason, info or {},
+        )
+        if self._ckpt_on_step and self._ckpt_fail_count <= 3:
+            try:
+                self._ckpt_on_step("checkpoint_error", {
+                    "reason": reason,
+                    "count": self._ckpt_fail_count,
+                    **(info or {}),
+                })
+            except Exception:
+                logger.warning("[checkpoint_error] 上报回调异常", exc_info=True)
 
     def _extract_files_from_result(
         self,
@@ -576,6 +603,9 @@ class AgentGraph:
         if task_id:
             task_manager.create_task(task_id)
         self._state_manager = None  # 重置
+        # 阶段八 P1：断点上报通道按轮重置（on_step 只对本轮有效）
+        self._ckpt_on_step = on_step
+        self._ckpt_fail_count = 0
 
         state = AgentState(
             messages=[],
@@ -1837,10 +1867,6 @@ class AgentGraph:
             if self._check_cancelled():
                 return {"success": False, "summary": "用户取消执行", "cancelled": True}
 
-            # 每个 action 后保存状态（断点恢复）
-            if self._state_manager:
-                await self._state_manager.save_state()
-
             # 如果写文件成功，更新 context_obj.task_path（供后续待办使用）
             # code_generator 同样会落盘，必须一起处理，否则它的产物不进文件树
             if execution_result.get("success", False) and action in ("file_operations", "code_generator"):
@@ -2168,6 +2194,24 @@ class AgentGraph:
         if session_id:
             params["session_id"] = session_id
 
+        # 阶段八：写操作意图日志上下文（session/task/todo）。loader 摘走后即从
+        # params 消失，不进参数契约校验、不落 execution_nodes.params。
+        if session_id:
+            params["_op_ctx"] = {
+                "session_id": session_id,
+                "task_id": self._task_id,
+                "todo_id": str(step.get("id") or ""),
+            }
+
+        # 阶段八 P1：写前快照 —— 先把"正在执行 X"落库再派发动作。进程在
+        # action 中途被杀/超时时，库里留着的这行证据能告诉恢复逻辑卡在哪一步
+        # （journal 的 running 行是另一个视角：op 级；这里是 action 级，且不
+        # 依赖 loader 是否登记成功）。动作收尾在 finally 里清掉。
+        # getattr：兼容测试里用 __new__ 构造的"部分" AgentGraph。
+        _sm = getattr(self, "_state_manager", None)
+        if _sm is not None and session_id:
+            _sm.begin_pending_action(action, params)
+            await _sm.save_state()  # 失败只上报（on_checkpoint_error），不拦执行
         try:
             from app.agent.skills.core.progressive_loader import get_loader
             loader = get_loader()
@@ -2198,6 +2242,11 @@ class AgentGraph:
                 "error_code": "EXEC_FAILED",
                 "action": action,
             }
+        finally:
+            # 动作无论成败都收尾：清掉"正在执行"标记（真正的落库由
+            # 调用方在 action 之后的那次 save_state 完成）
+            if _sm is not None:
+                _sm.end_pending_action()
 
     async def _safety_check(self, state: AgentState) -> AgentState:
         """输入安全检查"""

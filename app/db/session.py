@@ -6,6 +6,7 @@
 """
 
 from contextlib import asynccontextmanager
+import logging
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import (
@@ -20,6 +21,8 @@ from app.core.config import get_settings
 
 # 获取配置实例
 settings = get_settings()
+
+logger = logging.getLogger(__name__)
 
 # =============================================
 # 异步引擎配置
@@ -158,6 +161,48 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         # 创建所有表（如果不存在）
         await conn.run_sync(Base.metadata.create_all)
+
+    await sweep_orphan_tasks()
+
+
+async def sweep_orphan_tasks() -> int:
+    """清扫孤儿任务（阶段八 P1，2026-11-18）。
+
+    tasks.status 在执行开始时写成 running（main_graph 创建 TaskModel），
+    只有正常收尾才会被 _finalize_db_task 覆盖 —— 进程被 kill / 崩溃时
+    这行会永远停在 running，任务历史显示"执行中"但早已没有进程在跑。
+
+    阈值取 2 小时：
+    - 本进程刚启动，本 worker 不可能有任务在跑；
+    - 多 worker 场景下别的 worker 可能真的在跑，长阈值 + 完成时
+      _finalize_db_task 会把最终状态覆盖回来，误判只短暂存在。
+    """
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import update
+    from app.models.experience import TaskModel
+
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+        async with engine.begin() as conn:
+            res = await conn.execute(
+                update(TaskModel)
+                .where(
+                    TaskModel.status.in_(("running", "pending")),
+                    TaskModel.updated_at < cutoff,
+                )
+                .values(
+                    status="failed",
+                    error="服务重启/崩溃中断，任务未正常收尾",
+                )
+            )
+            n = int(getattr(res, "rowcount", 0) or 0)
+        if n:
+            logger.warning(f"[init_db] 清扫 {n} 条孤儿任务（running/pending 超 2 小时）")
+        return n
+    except Exception as e:
+        # 清扫失败绝不阻塞启动
+        logger.warning(f"[init_db] 孤儿任务清扫失败（忽略）: {e}")
+        return 0
 
 
 async def close_db() -> None:

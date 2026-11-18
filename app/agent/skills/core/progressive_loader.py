@@ -42,6 +42,12 @@ class SkillMetadata:
     url_arg: str = ""  # URL 参数名（如 url），供阶段三 safe_url
     timeout: int = 0  # 执行超时秒数，0=用全局默认
     retry: int = 0  # 瞬态重试次数（幂等 read/list 类才 >=1），0=不重试
+    # 幂等语义声明（SKILL.md frontmatter `op_semantics`），键为 operation 值或 "*"：
+    #   idempotent  重放安全（读 / 整文件覆盖写）→ 不记意图日志
+    #   conditional 可用世界状态核验（move/delete/edit）→ 核验后决定
+    #   once        不可重放（exec/network/未声明）→ 崩溃残留返回 AMBIGUOUS_SIDE_EFFECT
+    # 未声明按 risk/retry 推导，兜底 once（不可重放）。
+    op_semantics: Dict[str, str] = field(default_factory=dict)
     stage: str = "both"  # plan/execute/both：阶段四 stage 白名单消费
     file_path: Path = field(default=None)
     skill_dir: Path = field(default=None)
@@ -61,6 +67,7 @@ class SkillMetadata:
             "url_arg": self.url_arg,
             "timeout": self.timeout,
             "retry": self.retry,
+            "op_semantics": self.op_semantics,
             "stage": self.stage,
         }
 
@@ -283,6 +290,20 @@ class ProgressiveSkillLoader:
             raise ValueError(f"timeout/retry 必须是整数: {skill_md}") from e
 
         operation_targets = data.get("operation_targets") or {}
+        # 幂等语义声明（2026-11-18 写操作意图日志）：只收三个合法值，
+        # 非法值丢弃 → 走 risk/retry 推导，兜底 once（不可重放）
+        op_semantics_raw = data.get("op_semantics") or {}
+        op_semantics: Dict[str, str] = {}
+        if isinstance(op_semantics_raw, dict):
+            from app.agent.execution_journal import (
+                CONDITIONAL, IDEMPOTENT, ONCE,
+            )
+            _valid = {IDEMPOTENT, CONDITIONAL, ONCE}
+            op_semantics = {
+                str(k).strip().lower(): str(v).strip().lower()
+                for k, v in op_semantics_raw.items()
+                if str(v).strip().lower() in _valid
+            }
         # 缺失软约束：先 warning 不拦（阶段二约定，测试断言 9/9 硬覆盖）
         if not risk:
             logger.warning(
@@ -307,6 +328,7 @@ class ProgressiveSkillLoader:
             url_arg=str(data.get("url_arg") or ""),
             timeout=max(timeout, 0),
             retry=max(retry, 0),
+            op_semantics=op_semantics,
             stage=stage,
             file_path=skill_md,
             skill_dir=skill_dir,
@@ -489,6 +511,10 @@ class ProgressiveSkillLoader:
         from app.agent.skills.core.base_skill import SkillResult
         from app.agent.skills.guard import tool_guard
 
+        # 阶段八：调用方注入的执行上下文（session/task/todo），技能本身不消费，
+        # 只给写操作意图日志做 op_key 定位 —— 先摘掉，避免落进参数契约校验与日志。
+        op_ctx = params.pop("_op_ctx", None) if isinstance(params, dict) else None
+
         # 阶段三：RunGuard 单检查点（替换原 validate_params_structure L5 闸门；
         # 语义不变——不通过不进 skill）。顺序：白名单→契约/类型→路径/URL 约束
         # →连续失败熔断→风险门。拒绝返回结构化 code 走 correction。
@@ -532,6 +558,60 @@ class ProgressiveSkillLoader:
                 pass
             return result
 
+        # === 阶段八（2026-11-18）：写操作意图日志（崩溃后重试不重复副作用）===
+        # 语义由 SKILL.md `op_semantics` 声明；idempotent 类根本不记（零开销）。
+        # 决策三种：execute 放行 / replay 直接返回上次结果 / ambiguous 返回
+        # AMBIGUOUS_SIDE_EFFECT 让模型先核验再决定（禁止盲目重发）。
+        from app.agent.execution_journal import (
+            AMBIGUOUS, CONDITIONAL, REPLAY,
+            close_journal, mark_ambiguous, open_journal, resolve_semantics,
+            snapshot_result,
+        )
+
+        meta = self._index.get(name)
+        semantics = resolve_semantics(
+            risk=str(getattr(meta, "risk", "") or ""),
+            retry=int(getattr(meta, "retry", 0) or 0),
+            op_semantics=getattr(meta, "op_semantics", None),
+            params=params,
+        )
+        decision = await open_journal(
+            action=name,
+            params=params,
+            session_id=str((op_ctx or {}).get("session_id") or ""),
+            task_id=(op_ctx or {}).get("task_id"),
+            todo_id=(op_ctx or {}).get("todo_id"),
+            semantics=semantics,
+            # 延迟取核验器：只有命中已有 intent 才加载 skill 模块
+            verify=(lambda: self._verify_replay(name, params))
+            if semantics == CONDITIONAL else None,
+        )
+        if decision.action == REPLAY:
+            payload = decision.result or {}
+            logger.info(
+                "[ProgressiveLoader] %s 意图重放命中（%s），跳过重复执行",
+                name, decision.reason)
+            return _done(SkillResult(
+                success=bool(payload.get("success", True)),
+                data=payload.get("data"),
+                error=payload.get("error"),
+                error_code=payload.get("error_code"),
+                metadata={"operation": "replay", "replayed": True},
+            ))
+        if decision.action == AMBIGUOUS:
+            payload = decision.result or {}
+            logger.warning(
+                "[ProgressiveLoader] %s 崩溃残留无法确认（%s），交回模型核验",
+                name, decision.reason)
+            await mark_ambiguous(decision.op_key)
+            return _done(SkillResult(
+                success=False,
+                data=payload.get("data"),
+                error=payload.get("error")
+                or "该操作上次执行状态无法确认，请先核验结果再决定是否重做",
+                error_code="AMBIGUOUS_SIDE_EFFECT",
+            ))
+
         # 阶段五：瞬态重试——按 registry retry 元数据（幂等 read/list 类
         # retry≥1，写类默认 0）。只重试"执行期失败"（EXEC_FAILED 或未分类），
         # 结构类拒绝（MISSING_PARAM 等）确定性失败不重试；不复活
@@ -557,7 +637,37 @@ class ProgressiveSkillLoader:
                 "[ProgressiveLoader] %s 瞬态失败，退避重试 %d/%d (%.1fs): %s",
                 name, i + 1, max_retry, delay, str(result.error)[:200])
             await asyncio.sleep(delay)
+
+        # 阶段八收尾：正常返回才回写意图日志（done/failed）。
+        # CancelledError（超时/用户取消/进程崩溃）不走这里 —— 残留 running
+        # 正是下一轮重入判断"这步做到哪了"的证据。
+        await close_journal(
+            decision.op_key,
+            success=bool(result.success),
+            result=snapshot_result(result),
+            error=result.error,
+        )
         return _done(result)
+
+    async def _verify_replay(self, name: str, params: Dict[str, Any]):
+        """conditional 语义的世界状态核验器（技能可选提供 `verify_replay`）。
+
+        返回 True=已生效 / False=未生效 / None=无法判定（退化为按状态判定）。
+        核验是只读的，因此永远允许；缺核验器时返回 None。
+        """
+        try:
+            module = self._load_module(name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[ProgressiveLoader] %s 加载核验器失败: %s", name, e)
+            return None
+        fn = getattr(module, "verify_replay", None) if module else None
+        if not callable(fn):
+            return None
+        try:
+            return fn(**params)
+        except Exception as e:  # noqa: BLE001 - 核验失败=无法判定，不挡执行
+            logger.warning("[ProgressiveLoader] %s verify_replay 异常: %s", name, e)
+            return None
 
     async def _invoke(self, name: str, params: Dict[str, Any]) -> "SkillResult":
         """单次技能调用（executor 优先，其次动态模块），不带守卫/重试。

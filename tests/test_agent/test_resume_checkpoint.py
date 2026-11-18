@@ -36,7 +36,13 @@ class _FakeSaver:
     def __init__(self):
         self.store = {}
 
-    async def save_working(self, session_id, memory_key, memory_value):
+    async def save_working(self, session_id, memory_key, memory_value, expected_version=None):
+        # 契约同 PostgresSaver：expected_version 给定时做版本 CAS（阶段八 P1）
+        if expected_version is not None:
+            cur = self.store.get((session_id, memory_key))
+            cur_v = int((cur or {}).get("version", 0) or 0)
+            if cur_v != expected_version:
+                return 0  # 版本冲突：不写
         self.store[(session_id, memory_key)] = memory_value
         return 1
 

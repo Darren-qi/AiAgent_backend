@@ -253,6 +253,10 @@ class ToolGuard:
 
         if ok:
             self._fail_counts[name] = 0
+        elif error_code == "AMBIGUOUS_SIDE_EFFECT":
+            # 崩溃残留待核验：不是工具失败，不进熔断计数（否则核验-重试
+            # 的正常来回会把连续失败顶满，直接打断任务）
+            pass
         else:
             self._fail_counts[name] = self._fail_counts.get(name, 0) + 1
 

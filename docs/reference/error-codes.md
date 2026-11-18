@@ -165,6 +165,7 @@ AppException 管 HTTP 响应，本节管循环内 correction 分支（不走 HTT
 | `EXEC_FAILED` | 执行期异常 | loader/main_graph 兜底 exception |
 | `CONSECUTIVE_FAILURE` | 工具级连续失败熔断（≥`tool_consecutive_fail_limit` 拒下一次） | `guard.ToolGuard.begin`（阶段三） |
 | `RISK_DENIED` | 风险门拒绝（`tool_approval_mode=deny` 且 risk∈write/exec/network） | `guard.ToolGuard.begin`（阶段三） |
+| `AMBIGUOUS_SIDE_EFFECT` | 崩溃残留的写操作无法确认是否生效，交回模型先核验再决定是否重做 | `execution_journal.open_journal`（阶段八，2026-11-18） |
 
 **本节专用检查单**：新增 code → `TOOL_ERROR_CODES` + 上表 + `planner._build_correction_hints`
 分支（如需专属修正策略）+ 测试断言。前端无需同步（增量字段，`error` 文案不变）。

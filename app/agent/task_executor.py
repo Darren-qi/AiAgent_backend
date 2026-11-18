@@ -33,7 +33,9 @@ class TaskManager:
 
     注意：
     - 仅管理状态，不处理业务逻辑
-    - 纯内存存储，不持久化（持久化由 ExecutionStateManager 处理）
+    - 内存存储为主：进程内查询用它；状态转移同时同步到 tasks 表
+      （fire-and-forget，见 app/agent/task_persistence.py），
+      进程退出后 tasks.status 仍是最新值
     """
 
     _instance = None
@@ -51,8 +53,28 @@ class TaskManager:
         self._initialized = True
         logger.info("[TaskManager] 已初始化")
 
+    @staticmethod
+    def _persist(task_id: str, status: Any, error: str = "") -> None:
+        """状态转移同步到 tasks 表（阶段八 P1）。
+
+        内存态只服务进程内查询；进程一退就丢。落库是 fire-and-forget
+        且 fail-open（见 app/agent/task_persistence.py），绝不影响状态转移本身。
+        """
+        try:
+            from app.agent.task_persistence import schedule_task_status
+
+            schedule_task_status(
+                task_id, str(getattr(status, "value", status)), error)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[TaskManager] 状态落库调度失败 task={task_id}: {e}")
+
     def create_task(self, task_id: str) -> None:
-        """创建新任务"""
+        """创建新任务（只写内存，不落库）。
+
+        落库的 running 不需要这里写：行本来就是以 running 建的
+        （main_graph._save_execution_node / 接口创建任务），再写一次纯冗余。
+        终态（stopped/completed/failed）才同步落库。
+        """
         self._tasks[task_id] = {
             "status": TaskStatus.RUNNING,
         }
@@ -62,6 +84,7 @@ class TaskManager:
         """请求停止任务"""
         if task_id in self._tasks:
             self._tasks[task_id]["status"] = TaskStatus.STOPPED
+            self._persist(task_id, TaskStatus.STOPPED)
             logger.info(f"[TaskManager] 请求停止任务: {task_id}")
             return True
         logger.warning(f"[TaskManager] 任务不存在: {task_id}")
@@ -79,12 +102,14 @@ class TaskManager:
         """标记任务完成"""
         if task_id in self._tasks:
             self._tasks[task_id]["status"] = TaskStatus.COMPLETED
+            self._persist(task_id, TaskStatus.COMPLETED)
             logger.debug(f"[TaskManager] 任务完成: {task_id}")
 
     def fail_task(self, task_id: str) -> None:
         """标记任务失败"""
         if task_id in self._tasks:
             self._tasks[task_id]["status"] = TaskStatus.FAILED
+            self._persist(task_id, TaskStatus.FAILED)
             logger.debug(f"[TaskManager] 任务失败: {task_id}")
 
     def remove_task(self, task_id: str) -> None:

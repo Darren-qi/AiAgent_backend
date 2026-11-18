@@ -4,8 +4,9 @@ import os
 import asyncio
 import json
 import re
-import time
 import shutil
+import tempfile
+import time
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -13,6 +14,33 @@ from typing import Dict, Any, Optional
 from app.agent.skills.core.base_skill import BaseSkill, SkillResult
 
 logger = logging.getLogger(__name__)
+
+
+def _atomic_write_text(path: Path, content: str, encoding: str) -> None:
+    """原子写：同目录临时文件 + os.replace（2026-11-18 崩溃幂等 P0）。
+
+    直接 write_text 在进程崩溃时会留下半截文件（读到残缺内容更难排查）；
+    原子替换保证任何时刻读到的都是完整旧版或完整新版。
+    权限按 umask 对齐普通 open() 的 0666（mkstemp 默认 0600 会改掉可读性）。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp_name, 0o666 & ~umask)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _salvage_files_array(text: str):
@@ -628,7 +656,7 @@ class FileOperationsSkill(BaseSkill):
                     # 如果 fname 包含路径分隔符，按路径创建
                     fpath = target_dir / fname
                     fpath.parent.mkdir(parents=True, exist_ok=True)
-                    fpath.write_text(fcontent, encoding=encoding)
+                    _atomic_write_text(fpath, fcontent, encoding)
                     # 记录相对于项目目录的路径（用于数据库记录）
                     created_files.append(fname)
 
@@ -812,9 +840,8 @@ class FileOperationsSkill(BaseSkill):
             if not self._is_safe_path(abs_path):
                 return SkillResult(success=False, error=f"安全检查失败：禁止写入路径 {abs_path}")
 
-            # 4. 创建父目录并写入文件
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding=encoding)
+            # 4. 创建父目录并写入文件（原子写：崩溃不留半截文件）
+            _atomic_write_text(path, content, encoding)
             logger.info(f"[FileOps] 写入文件: {path}")
 
             # 5. 记录文件到数据库
@@ -978,7 +1005,7 @@ class FileOperationsSkill(BaseSkill):
         n = hits if replace_all else 1
         new_content = content.replace(old_text, new_text, n)
         try:
-            path.write_text(new_content, encoding=encoding)
+            _atomic_write_text(path, new_content, encoding)
         except Exception as e:
             return SkillResult(success=False, error=f"写入文件失败: {e}")
         return SkillResult(
@@ -1515,3 +1542,179 @@ skill = FileOperationsSkill()
 async def execute(**kwargs) -> SkillResult:
     """Skill 执行入口"""
     return await skill.execute(**kwargs)
+
+
+# --------------------------------------------------------------- 崩溃重放核验
+# 阶段八（2026-11-18）：conditional 语义的世界状态核验器，由
+# ProgressiveLoader 在"同一调用已有意图日志残留"时调用（只读，绝不改动文件）。
+#   True  = 已生效 → 跳过重复执行，复用上次结果
+#   False = 未生效 → 放行重执行
+#   None  = 无法判定 → 退化为按意图日志状态判定（done 走重放 / running 走 ambiguous）
+
+
+def verify_replay(**kwargs) -> Optional[bool]:
+    """file_operations 的崩溃重放核验入口。"""
+    op = str(kwargs.get("operation") or "").strip().lower()
+    task_path = kwargs.get("task_path")
+    try:
+        # 与 execute() 同规则先剥任务前缀，否则路径解析对不上
+        if task_path:
+            kwargs = skill._strip_task_prefix_kwargs(kwargs, str(task_path))
+        if op == "delete":
+            return _verify_delete(kwargs, task_path)
+        if op == "move":
+            return _verify_move(kwargs, task_path)
+        if op == "edit":
+            return _verify_edit(kwargs, task_path)
+        # create/read/list/write 不走核验：write/read/list 幂等不记日志，
+        # create 无法可靠复现时间戳目录名 → 按 once 处理
+        return None
+    except Exception as e:  # noqa: BLE001 - 核验异常=无法判定，不挡执行
+        logger.warning(f"[FileOps] verify_replay({op}) 异常，按无法判定处理: {e}")
+        return None
+
+
+def _resolve_safe(file_path: str, task_path) -> Optional[Path]:
+    """解析路径并做安全检查；不安全或解析不出 → None（无法判定）。"""
+    p = skill._resolve_move_path(str(file_path), task_path)
+    try:
+        if not skill._is_safe_path(str(p.resolve())):
+            return None
+    except OSError:
+        return None
+    return p
+
+
+def _collect_paths(kwargs: Dict[str, Any]) -> list:
+    """收集 delete 用的目标路径（单个 + paths[]/files[] 批量）。"""
+    out = []
+    for key in ("path", "file_path"):
+        v = kwargs.get(key)
+        if isinstance(v, str) and v:
+            out.append(v)
+    for key in ("paths", "files"):
+        v = kwargs.get(key)
+        if isinstance(v, list):
+            for it in v:
+                if isinstance(it, str) and it:
+                    out.append(it)
+                elif isinstance(it, dict):
+                    t = (it.get("path") or it.get("file")
+                         or it.get("delete") or it.get("target"))
+                    if isinstance(t, str) and t:
+                        out.append(t)
+    return out
+
+
+def _verify_delete(kwargs: Dict[str, Any], task_path) -> Optional[bool]:
+    targets = _collect_paths(kwargs)
+    if not targets:
+        return None
+    paths: list = []
+    for t in targets:
+        p = _resolve_safe(t, task_path)
+        if p is None:
+            return None
+        paths.append(p)
+    exist = [p.exists() for p in paths]
+    if not any(exist):
+        return True    # 全没了 = 已删
+    if all(exist):
+        return False   # 全还在 = 没删过
+    return None        # 部分删了，无法判定（不能拿部分当全部）
+
+
+def _verify_move(kwargs: Dict[str, Any], task_path) -> Optional[bool]:
+    pairs = []
+
+    def _add(src, dst):
+        if isinstance(src, str) and isinstance(dst, str) and src and dst:
+            pairs.append((src, dst))
+
+    _add(kwargs.get("path") or kwargs.get("src") or kwargs.get("from")
+         or kwargs.get("source"),
+         kwargs.get("dest") or kwargs.get("destination") or kwargs.get("to")
+         or kwargs.get("dst") or kwargs.get("target_path"))
+    files = kwargs.get("files")
+    if isinstance(files, list):
+        for it in files:
+            if isinstance(it, dict):
+                _add(it.get("path") or it.get("src") or it.get("from")
+                     or it.get("source"),
+                     it.get("dest") or it.get("destination") or it.get("to")
+                     or it.get("dst") or it.get("target_path"))
+    if not pairs:
+        return None
+
+    verdicts = []
+    for src, dst in pairs:
+        sp = _resolve_safe(src, task_path)
+        dp = _resolve_safe(dst, task_path)
+        if sp is None or dp is None:
+            verdicts.append(None)
+        elif not sp.exists() and dp.exists():
+            verdicts.append(True)    # 源没了、目标在 = 搬完
+        elif sp.exists():
+            verdicts.append(False)   # 源还在 = 没搬
+        else:
+            verdicts.append(None)    # 源没了目标也不在 = 无法判定
+    if all(v is True for v in verdicts):
+        return True
+    if any(v is False for v in verdicts):
+        return False
+    return None
+
+
+def _edit_verdict(content: str, old_text: str, new_text: str) -> Optional[bool]:
+    """单处编辑的判定：新文本在且旧文本不在=已生效；旧在新不在=未生效。"""
+    old_in = old_text in content
+    new_in = new_text in content
+    if new_in and not old_in:
+        return True
+    if old_in and not new_in:
+        return False
+    return None   # 两者都在（new 包含 old）或都不在 → 不下结论
+
+
+def _verify_edit(kwargs: Dict[str, Any], task_path) -> Optional[bool]:
+    encoding = str(kwargs.get("encoding") or "utf-8")
+    items = []
+    edits = kwargs.get("edits")
+    if isinstance(edits, list) and edits:
+        for it in edits:
+            if not isinstance(it, dict):
+                continue
+            p = it.get("path") or kwargs.get("path") or kwargs.get("file_path")
+            old = (it.get("old") or it.get("old_text") or it.get("old_string"))
+            new = (it.get("new") or it.get("new_text") or it.get("new_string"))
+            if p and old is not None and new is not None:
+                items.append((p, str(old), str(new)))
+    else:
+        p = kwargs.get("path") or kwargs.get("file_path")
+        old = kwargs.get("old_text") or kwargs.get("old")
+        new = kwargs.get("new_text") or kwargs.get("new")
+        if p and old is not None and new is not None:
+            items.append((p, str(old), str(new)))
+    if not items:
+        return None
+
+    verdicts = []
+    for p, old, new in items:
+        fp = _resolve_safe(p, task_path)
+        if fp is None:
+            verdicts.append(None)
+            continue
+        if not fp.exists():
+            verdicts.append(False)   # edit 只能改已有文件，文件都不在=没生效
+            continue
+        try:
+            content = fp.read_text(encoding=encoding)
+        except Exception:  # noqa: BLE001
+            verdicts.append(None)
+            continue
+        verdicts.append(_edit_verdict(content, old, new))
+    if all(v is True for v in verdicts):
+        return True
+    if any(v is False for v in verdicts):
+        return False
+    return None

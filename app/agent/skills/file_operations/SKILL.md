@@ -8,6 +8,14 @@ tags:
   - io
   - project-init
 risk: write
+op_semantics:
+  read: idempotent
+  list: idempotent
+  write: idempotent
+  create: once
+  edit: conditional
+  move: conditional
+  delete: conditional
 path_arg: path
 timeout: 60
 retry: 0

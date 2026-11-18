@@ -72,23 +72,13 @@ async def _finalize_db_task(task_id: str, status: str, error: str = "") -> None:
 
     原先任务记录创建时写 status='running' 后再没人更新过，导致所有任务
     永远停在 running（失败的也是 running），看起来就是"任务没执行完"。
+
+    实现已移到 app/agent/task_persistence.py，与 TaskManager 的状态转移
+    落库共用一份（阶段八 P1）；这里保留转调，调用点不变。
     """
-    try:
-        from sqlalchemy import update
-        from app.models.experience import TaskModel
-        async with AsyncSessionLocal() as s:
-            stmt = (
-                update(TaskModel)
-                .where(TaskModel.task_id == task_id)
-                .values(status=status, error=error or "", updated_at=datetime.now(timezone.utc))
-            )
-            if status != "completed":
-                # 已完成的任务不被"客户端断连"覆盖成 failed
-                stmt = stmt.where(TaskModel.status != "completed")
-            await s.execute(stmt)
-            await s.commit()
-    except Exception as e:
-        logger.warning(f"[Agent] 更新任务最终状态失败: {e}")
+    from app.agent.task_persistence import persist_task_status
+
+    await persist_task_status(task_id, status, error)
 
 
 async def _persist_assistant(session_id: str, content: str,

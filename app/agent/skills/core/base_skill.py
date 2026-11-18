@@ -21,6 +21,7 @@ TOOL_ERROR_CODES = (
     "EXEC_FAILED",        # 执行期异常
     "CONSECUTIVE_FAILURE",  # 工具级连续失败熔断（阶段三）
     "RISK_DENIED",        # 风险门拒绝（APPROVAL_MODE=deny，阶段三）
+    "AMBIGUOUS_SIDE_EFFECT",  # 崩溃残留的写操作无法确认是否生效（阶段八，2026-11-18）
 )
 
 

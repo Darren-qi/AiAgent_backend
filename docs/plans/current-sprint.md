@@ -4,6 +4,7 @@
 > 本文按仓库改动整理；完成一项勾一项，
 > 合并后在文末"迭代记录"追加一行。规则见 [../conventions/testing.md](../conventions/testing.md)。
 > 2026-11-17 更新：A–E 已全部提交（`36477e1`），工作区干净；新增 G 条目（工具层 Harness 七阶段）。
+> 2026-11-18 更新：新增 H 条目（阶段八：写操作幂等 + 断点可靠性），工作区 17 改 + 8 新文件待提交。
 
 ## 迭代主题
 
@@ -90,10 +91,38 @@
 - [ ] `app/api/v1/router.py` 死代码清理（或恢复为唯一挂载方式，二选一收口）；
 - [ ] AutoGen 后端（:8001）ContextManager 二期评估（`CONTEXT_MANAGER_PLAN.md` §8）。
 
+## H. 工具层 Harness 阶段八：写操作幂等 + 断点可靠性（2026-11-18）
+
+### P0 写操作幂等：崩溃后重试不重复副作用
+- **意图日志表** `app/models/action_journal.py` + `alembic/versions/010_add_action_journal.py`（op_key 唯一、status=running/done/failed/ambiguous、params/result 快照、两个索引）。
+  ⚠️ 本地库没有 `alembic_version`（表由 `init_db` 的 create_all 建），**不要在这库上跑 `alembic upgrade head`**（会从 001 全量重放）；`upgrade head --sql` 也会在 003 离线取连接处崩，单步验证用 `upgrade 009:010 --sql`。
+- **裁决树** `app/agent/execution_journal.py` → `EXECUTE / REPLAY / AMBIGUOUS_SIDE_EFFECT`：
+  - 语义五级解析：`op_semantics[op]` → `*` → `retry>=1` → `risk=read` → **兜底 once（不可重放）**
+  - `idempotent`：不写库，零开销
+  - `once`：新 op 写 intent；`running` → AMBIGUOUS（崩溃/超时残留，宁可少做不可重做）；`done` 在 120s 新鲜窗口内重放、过期放行（避免老 done 误杀合法重跑）；**已判 ambiguous 一次后模型仍原样重发 = 知情决定 → 放行**（否则一次性操作永久卡死）
+  - `conditional`：永远先做世界状态核验（技能 `verify_replay`）：True=重放结果（无快照也给 success）、False=放行重跑、None=退化按状态判定
+  - DB I/O 全 fail-open；`_purge_stale()` 每进程每小时清 7 天前数据；`purge_session()` 供任务收尾清理
+- **接线** `progressive_loader.execute`：摘 `_op_ctx` → 解析语义 → `open_journal` → replay/ambiguous 直接返回 → 正常执行后 `close_journal`；**CancelledError 不收尾**（残留 running 正是崩溃证据）。
+- **file_operations**：SKILL.md 声明 read/list/write=idempotent、create=once、edit/move/delete=conditional；`verify_replay`（存在性核验，先过 `_is_safe_path`）；`_atomic_write_text()`（同目录 tmp + fsync + `os.replace`）接入 write/edit/create 三处，杜绝半截文件。
+- **错误码闭环**：`TOOL_ERROR_CODES` 加 `AMBIGUOUS_SIDE_EFFECT`，guard 熔断跳过该码，planner 修正提示"先核验再决定，禁止原样重发"，`docs/reference/error-codes.md` §7 登记。
+
+### P1 断点可靠性：save 失败不再静默
+- **version 乐观锁**：`pgsaver.save_working(expected_version=…)` — UPDATE 带 `WHERE version=旧行`，rowcount=0 再走"只复活软删行"的 upsert；`ExecutionStateManager._version` 跟踪基线，冲突时采纳库里新基线重试一次，仍失败才计数上报。旧状态行无 version 键按 0 兼容。
+- **save 失败上报**：`on_checkpoint_error` → `AgentGraph._report_checkpoint_error` → SSE `checkpoint_error`（每轮最多 3 条；回调异常吞掉；前端未订阅=无副作用）。
+- **执行前 pending_action（写前快照）**：派发前 `begin_pending_action` + `save_state()` 落库，`finally` 清内存标记 → 进程在 action 中途被杀，库里留着"卡在哪一步"；恢复时 `prepare_resume` 写一条「【断点】上次中断时正在执行: X」并清标记。只存 action + params sha256 前 8 位，不存参数原文。
+- **去掉重复 save**：main_graph 每次 action 后的第二次 `save_state()` 删除（同一轮白写一遍库）。
+- **TaskManager 终态落库** `app/agent/task_persistence.py`：stopped/completed/failed 同步 UPDATE `tasks`（fire-and-forget、completed 不被覆盖、fail-open），`agent._finalize_db_task` 转调同一实现；**create 不落库**（行创建时本就是 running，重复写没有信息量，少一次连接占用）。启动 `init_db()` → `sweep_orphan_tasks()` 把超 2 小时的 running/pending 标 failed。
+
+### 验证
+- 新增 4 个测试文件：`test_action_journal`(30) / `test_checkpoint_version`(14) / `test_atomic_write`(7) / `test_task_persistence`(8)；全量 **289 passed, 29 skipped**（基线 229 passed）。
+- 真实 PG 探针（跑完即清理）：CAS 首插/正常递增/冲突返回 0/旧行无 version 兼容 全过；journal running→done→fresh replay→ambiguous→verify True/False→purge_session 全链路全过。
+- ⚠️ 墙钟时间：全量 286s，其中 `test_billed_accumulates_across_turns` 与 `test_agent.py` 三个 graph 用例占大头；同一条代码在不同次运行里 20s~150s 都出现过（user CPU 仅 2s，纯外部等待），**无证据表明与本批改动有因果关系**，已排除 `create` 落库这一项后仍复现。
+
 ## 迭代记录
 
 | 日期 | 内容 |
 |---|---|
+| 2026-11-18 | **阶段八**：写操作幂等（action_journal WAL + 语义白名单 + 原子写）+ 断点可靠性（version 乐观锁 / save 失败上报 / pending_action 写前快照 / TaskManager 终态落库）；289 passed |
 | 2026-11-17 | A–E 随 `36477e1` 提交；工具层 Harness 七阶段全部交付（`2eedc48`→`1c8625c` 共 5 个 feat commit），门禁 229 passed 全绿 |
 | 2026-11-16 | 建立 docs 七件套；整理未提交改动为 A–E 五条主线 |
 | 2026-11-14 | 断点续跑、planner 参数守卫、usage 计费三线开工（生产现场驱动） |

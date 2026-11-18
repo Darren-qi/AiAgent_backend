@@ -930,6 +930,11 @@ title: {todo.get("title", "")}
 **错误分析**: 当前审批模式禁止该风险级工具（error_code=RISK_DENIED）。
 **修正策略**: 换用只读/低风险方式完成；确需写/执行/联网时向用户说明并请求授权。
 """,
+            "AMBIGUOUS_SIDE_EFFECT": """
+**错误分析**: 该操作在上次崩溃前已发起，是否生效无法确认（error_code=AMBIGUOUS_SIDE_EFFECT）。
+**修正策略**: 禁止原样重发——先核验：用 read/search_files 查文件是否已变、查接口/命令产出；
+确认已生效就直接推进下一步，确认未生效再重做。
+""",
         }
         if last_error_code in code_hints:
             return code_hints[last_error_code]

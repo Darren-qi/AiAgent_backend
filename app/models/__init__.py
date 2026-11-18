@@ -16,6 +16,7 @@ from app.models.experience import (
     SessionFile,
 )
 from app.models.execution_node import ExecutionNode
+from app.models.action_journal import ActionJournal
 
 # Memory models - 导入以注册到 Base.metadata
 from app.agent.memory.models import (  # noqa: F401
@@ -46,6 +47,7 @@ __all__ = [
     "SessionContext",
     "SessionFile",
     "ExecutionNode",
+    "ActionJournal",
     # Memory
     "ConversationMessage",
     "SemanticFact",

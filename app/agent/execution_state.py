@@ -14,6 +14,7 @@
 - 与 session 绑定，支持多会话并发
 """
 
+import hashlib
 import json
 import os
 import time
@@ -129,11 +130,37 @@ class ExecutionStateManager:
         # 失败收尾断点标记（2026-11-14 用户定：失败也支持断点继续）：
         # 非空=上一轮以失败收尾，随状态落库，下一轮由 cap_restore 判续/弃
         self.failed_error: str = ""
+        # 阶段八 P1：执行中的动作标记（写前快照）。非空=上一次落库时
+        # 某个 action 正在执行 → 崩溃/超时后恢复能知道"卡在哪一步"。
+        self.pending_action: Optional[Dict[str, Any]] = None
         self.last_action_result: Optional[ActionResult] = None
         self._is_running: Optional[Callable[[], bool]] = None
         self._pg_saver = None
 
+        # 阶段八 P1：断点可靠性
+        # - version 乐观锁基线：load_state 读回，save_state 写 version+1，
+        #   CAS 失败=同会话并发覆盖（不再静默丢断点）
+        # - save_failures/last_save_error：写失败不再只 log
+        # - on_checkpoint_error(reason, info)：上报回调（AgentGraph 接 SSE）
+        self._version: int = 0
+        self.save_failures: int = 0
+        self.last_save_error: str = ""
+        self.on_checkpoint_error: Optional[Callable[[str, Dict[str, Any]], None]] = None
+
         self._init_scratchpad()
+
+    def _report_checkpoint_error(self, reason: str, detail: str = ""):
+        """断点写失败上报（阶段八 P1）：不再只写日志。
+
+        reason: save_failed | version_conflict
+        """
+        cb = self.on_checkpoint_error
+        if not cb:
+            return
+        try:
+            cb(reason, {"detail": str(detail)[:500], "session_id": self.session_id})
+        except Exception:
+            logger.warning("[ExecutionStateManager] 断点上报回调异常", exc_info=True)
 
     def _init_scratchpad(self):
         self.scratchpad = ""
@@ -320,6 +347,7 @@ class ExecutionStateManager:
             return False
 
         try:
+            next_version = self._version + 1
             state_data = {
                 "scratchpad": self.scratchpad,
                 "user_input": self.user_input,
@@ -328,21 +356,56 @@ class ExecutionStateManager:
                 "iteration": self.iteration,
                 "errors": self.errors,
                 "failed_error": self.failed_error,
+                "pending_action": self.pending_action,
+                "version": next_version,
                 "saved_at": time.time(),
             }
             saved_id = await saver.save_working(
                 session_id=self.session_id,
                 memory_key=self._STATE_KEY,
                 memory_value=state_data,
+                expected_version=self._version,
             )
+            if not saved_id:
+                # 乐观锁冲突：有人在本轮之外写了同一行（同会话并发）
+                # → 采纳库里较新的 base 重试一次；仍失败才算写失败并上报
+                conflict_detail = f"expected={self._version}"
+                stored = await saver.get_working(self.session_id, self._STATE_KEY)
+                stored_val = (stored or {}).get("value") or {}
+                if isinstance(stored_val, dict):
+                    self._version = int(stored_val.get("version", 0) or 0)
+                    state_data["version"] = self._version + 1
+                    saved_id = await saver.save_working(
+                        session_id=self.session_id,
+                        memory_key=self._STATE_KEY,
+                        memory_value=state_data,
+                        expected_version=self._version,
+                    )
+                if not saved_id:
+                    self.save_failures += 1
+                    self.last_save_error = f"version_conflict({conflict_detail})"
+                    logger.error(
+                        "[checkpoint_error] 断点写入被并发覆盖且重试失败: "
+                        f"session={self.session_id}, {conflict_detail}"
+                    )
+                    self._report_checkpoint_error("version_conflict", conflict_detail)
+                    return False
+                logger.warning(
+                    f"[ExecutionStateManager] 断点并发覆盖，已采纳新基线并重试成功: "
+                    f"session={self.session_id}, {conflict_detail}"
+                )
+            self._version = int(state_data["version"])
             logger.info(
                 f"[ExecutionStateManager] 保存状态成功: "
                 f"session={self.session_id}, todos={len(self.todos)}, "
-                f"iteration={self.iteration}"
+                f"iteration={self.iteration}, version={self._version}"
             )
             return True
         except Exception as e:
-            logger.error(f"[ExecutionStateManager] 保存状态失败: {e}")
+            self.save_failures += 1
+            self.last_save_error = str(e)
+            logger.error(f"[checkpoint_error] 保存状态失败: {e}")
+            self._report_checkpoint_error("save_failed", str(e))
             return False
 
     async def load_state(self) -> bool:
@@ -384,6 +447,11 @@ class ExecutionStateManager:
             self.errors = state_data.get("errors", [])
             # 恢复失败收尾标记（旧状态行无此键=空，向后兼容）
             self.failed_error = state_data.get("failed_error", "") or ""
+            # 恢复"正在执行的动作"标记（旧状态行无此键=None）
+            pa = state_data.get("pending_action")
+            self.pending_action = pa if isinstance(pa, dict) else None
+            # 恢复乐观锁基线（旧状态行无 version 键=0）
+            self._version = int(state_data.get("version", 0) or 0)
 
             logger.info(
                 f"[ExecutionStateManager] 状态已恢复: "
@@ -430,6 +498,38 @@ class ExecutionStateManager:
                 t.status = TodoStatus.PENDING
                 t.error = ""
         self.failed_error = ""
+        # 阶段八 P1：上次落库时有动作正在执行 → 写前快照就是"卡在哪一步"的
+        # 证据（journal 的 running 行同理，这里即使 op还没登记也有）。用完即清。
+        if self.pending_action:
+            pa = self.pending_action or {}
+            self._append_scratchpad(
+                f"【断点】上次中断时正在执行: {pa.get('action') or '?'} "
+                f"(params#{pa.get('params_digest') or '-'})\n"
+            )
+            self.pending_action = None
+
+    def begin_pending_action(self, action: str, params: Dict[str, Any]):
+        """执行 action 前记入快照（阶段八 P1，配合 save_state 做写前落库）。
+
+        只存动作名 + 参数摘要（sha256 前 8 位）：快照会进前端/日志，
+        参数原文可能含路径、命令等噪音甚至敏感内容。
+        """
+        try:
+            digest = hashlib.sha256(
+                json.dumps(params or {}, sort_keys=True, ensure_ascii=False,
+                           default=str).encode("utf-8")
+            ).hexdigest()[:8]
+        except Exception:
+            digest = "-"
+        self.pending_action = {
+            "action": str(action or ""),
+            "params_digest": digest,
+            "started_at": time.time(),
+        }
+
+    def end_pending_action(self):
+        """动作收尾（无论成败）：把"正在执行"标记清掉。"""
+        self.pending_action = None
 
     def get_recovery_info(self) -> Dict[str, Any]:
         """获取恢复信息摘要（用于前端显示）"""
