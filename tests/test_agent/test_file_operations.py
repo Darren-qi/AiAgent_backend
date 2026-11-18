@@ -715,7 +715,7 @@ requirements.txt::Flask>=2.0.0
         assert (project_dir / "config.py").read_text(encoding="utf-8") == "CFG = 1"
 
         # 单文件失败不拖垮整批（非法路径内容的文件失败，其余成功）
-        r2 = await self.skill.execute(
+        await self.skill.execute(
             operation="write",
             files=[{"path": "ok1.py", "content": "A"},
                    {"path": "../escape.py", "content": "B"}],

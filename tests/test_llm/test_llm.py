@@ -1,7 +1,6 @@
 """LLM 模块测试"""
 
 import pytest
-from unittest.mock import MagicMock, patch
 from app.agent.llm.types import ModelConfig, ModelProvider, ChatMessage, ChatRequest
 from app.agent.llm.router import ModelRouter
 from app.agent.llm.budget_manager import BudgetManager, BudgetStatus

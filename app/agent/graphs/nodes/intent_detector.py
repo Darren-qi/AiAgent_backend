@@ -5,12 +5,12 @@
 """
 
 import json
-import re
 import logging
 from typing import Dict, Any, List, Optional
 import re as regex_module
 
 from app.agent.llm.factory import LLMFactory
+from app.agent.graphs.nodes.llm_chat_mixin import LLMChatMixin
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ INTENT_TYPES = {
 }
 
 
-class IntentDetector:
+class IntentDetector(LLMChatMixin):
     """意图检测器 - LLM 语义理解 + 关键词匹配兜底
 
     简化版：只进行意图检测，不再评估复杂度。
@@ -109,12 +109,6 @@ class IntentDetector:
         if self._llm_factory is None:
             self._llm_factory = LLMFactory.get_instance()
         return self._llm_factory
-
-    async def _llm_chat(self, messages: list, **kwargs):
-        """统一 LLM 调用方法，自动传递 task_id 以支持取消"""
-        if self._task_id:
-            kwargs["task_id"] = self._task_id
-        return await self.llm_factory.chat(messages, **kwargs)
 
     async def detect(self, task: str) -> Dict[str, Any]:
         """

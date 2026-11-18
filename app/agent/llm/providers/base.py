@@ -1,7 +1,7 @@
 """LLM 基类"""
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Dict, Any, Optional
+from typing import AsyncIterator, Dict
 
 from app.agent.llm.types import ChatRequest, LLMResponse, ModelConfig
 

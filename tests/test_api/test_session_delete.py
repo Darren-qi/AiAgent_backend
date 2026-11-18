@@ -4,7 +4,7 @@
 （src/api/agent.js `session.delete`），断言它确实调用了 cleanup_session。
 不连真实 DB：把 AsyncSessionLocal 与 cleanup_session 都换成替身。
 """
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient

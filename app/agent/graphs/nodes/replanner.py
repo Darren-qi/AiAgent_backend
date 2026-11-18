@@ -42,7 +42,6 @@ class Replanner:
         - 第3次: 使用兜底方案或返回部分结果
         """
         original_plan = state.plan or []
-        current_step = state.current_step
 
         # 获取重试次数
         if retry_count is None:

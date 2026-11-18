@@ -13,7 +13,6 @@ from app.agent.llm.types import (
     LLMResponse,
     ModelConfig,
     ModelProvider,
-    ChatMessage,
 )
 
 
@@ -104,11 +103,10 @@ class DeepSeekProvider(BaseLLMProvider):
         if request.tools:
             kwargs["tools"] = request.tools
 
-        async with httpx.AsyncClient() as client:
-            async with self._pick_client(request).chat.completions.create(**kwargs) as stream:
-                async for chunk in stream:
-                    if chunk.choices and chunk.choices[0].delta.content:
-                        yield chunk.choices[0].delta.content
+        async with self._pick_client(request).chat.completions.create(**kwargs) as stream:
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
 
     async def validate_connection(self) -> bool:
         """验证连接是否正常"""

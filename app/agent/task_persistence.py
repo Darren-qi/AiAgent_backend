@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Set
+from typing import Set
 
 logger = logging.getLogger(__name__)
 

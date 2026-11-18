@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from sqlalchemy import update
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.sql.dml import Update
 

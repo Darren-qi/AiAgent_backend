@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """Storage 端点"""
 
-from typing import Optional
 from fastapi import APIRouter, UploadFile, File
 
-from app.api.deps import DBSession, CurrentUser
+from app.api.deps import CurrentUser
 from app.api.v1.schemas.storage import StorageUploadResponse, StorageListResponse
 from app.agent.tools.storage.manager import StorageManager
 

@@ -6,7 +6,7 @@
 
 import pytest
 
-from app.agent.skills.guard import ToolGuard, tool_guard
+from app.agent.skills.guard import tool_guard
 from app.core.config import get_settings
 
 

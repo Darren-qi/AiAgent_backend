@@ -1,6 +1,6 @@
 """邮件通知服务"""
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart

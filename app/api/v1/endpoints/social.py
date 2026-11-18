@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """Social 端点"""
 
-from typing import List
 from fastapi import APIRouter
 
-from app.api.deps import DBSession, CurrentUser
+from app.api.deps import CurrentUser
 from app.api.v1.schemas.social import SocialSendRequest, SocialSendResponse
 from app.agent.tools.social.manager import SocialManager
 

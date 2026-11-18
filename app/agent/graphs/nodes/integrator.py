@@ -4,6 +4,7 @@
 
 import logging
 from typing import TYPE_CHECKING, Dict, Any, List, Optional
+from app.agent.graphs.nodes.llm_chat_mixin import LLMChatMixin
 
 if TYPE_CHECKING:
     from app.agent.graphs.main_graph import AgentState
@@ -44,7 +45,7 @@ COMPLETION_SUMMARY_PROMPT = """你是任务执行总结专家。请为以下任�
 请生成总结："""
 
 
-class Integrator:
+class Integrator(LLMChatMixin):
     """结果整合器"""
 
     def __init__(self):
@@ -62,12 +63,6 @@ class Integrator:
             from app.agent.llm.factory import LLMFactory
             self._llm_factory = LLMFactory.get_instance()
         return self._llm_factory
-
-    async def _llm_chat(self, messages: list, **kwargs):
-        """统一 LLM 调用方法，自动传递 task_id 以支持取消"""
-        if self._task_id:
-            kwargs["task_id"] = self._task_id
-        return await self.llm_factory.chat(messages, **kwargs)
 
     async def integrate(self, state: "AgentState") -> str:
         """

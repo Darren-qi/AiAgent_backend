@@ -2,7 +2,6 @@
 
 import pytest
 from httpx import AsyncClient, ASGITransport
-from unittest.mock import patch, MagicMock, AsyncMock
 import sys
 import os
 
@@ -120,7 +119,7 @@ class TestConversationEndpoint:
             base_url="http://test"
         ) as client:
             response = await client.post(
-                "/api/v1/session/create-session/",   # conversations 路由已下线，现为 session
+                "/api/v1/agent/create-session/",   # session 路由已删，现走 agent
                 json={"title": "Test Conversation"},
                 headers={"Authorization": "Bearer test-token"}
             )
@@ -140,7 +139,8 @@ class TestMemoryEndpoint:
             base_url="http://test"
         ) as client:
             response = await client.get(
-                "/api/v1/session/session-123",   # memory 路由已下线，现为 session
+                "/api/v1/agent/get-session/",   # memory/session 路由已删，现走 agent
+                params={"session_id": "session-123"},
                 headers={"Authorization": "Bearer test-token"}
             )
             assert response.status_code in [200, 401]

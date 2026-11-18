@@ -7,8 +7,9 @@ import logging
 from typing import Dict, Any, List, Optional
 
 from app.agent.llm.factory import LLMFactory
+from app.agent.graphs.nodes.llm_chat_mixin import LLMChatMixin
 from app.agent.skills.core.progressive_loader import (
-    get_loader, ProgressiveSkillLoader, validate_params_structure,
+    get_loader, validate_params_structure,
 )
 
 logger = logging.getLogger(__name__)
@@ -337,7 +338,7 @@ AVAILABLE_SKILLS = {
 }
 
 
-class Planner:
+class Planner(LLMChatMixin):
     """任务规划器 - LLM 动态规划"""
 
     # 任务规划 Prompt
@@ -453,22 +454,6 @@ class Planner:
                 use_for = ", ".join(info["use_for"])
                 lines.append(f"- **{name}**: {info['description']} | 参数: {params} | 适用: {use_for}")
             return "\n".join(lines)
-
-    async def _llm_chat(self, messages: list, **kwargs):
-        """
-        统一 LLM 调用方法，自动传递 task_id 以支持取消
-
-        Args:
-            messages: 消息列表
-            **kwargs: 其他参数（如 strategy, temperature 等）
-
-        Returns:
-            LLM 响应
-        """
-        # 如果有 task_id，传递它以支持可取消的 LLM 调用
-        if self._task_id:
-            kwargs["task_id"] = self._task_id
-        return await self.llm_factory.chat(messages, **kwargs)
 
     async def create_plan(self, task: str, intent: str) -> List[Dict[str, Any]]:
         """

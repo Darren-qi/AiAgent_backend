@@ -1,7 +1,5 @@
 """Test Social platform integrations."""
 
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 import sys
 import os
 

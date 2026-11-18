@@ -1,7 +1,6 @@
 """Agent Schema"""
 
-from typing import Optional, List, Dict, Any
-from datetime import datetime
+from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field
 
 

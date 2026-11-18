@@ -1,7 +1,6 @@
 """General Response Skill - 通用响应技能"""
 
 import logging
-from typing import Dict, Any
 
 from app.agent.skills.core.base_skill import BaseSkill, SkillResult
 from app.agent.llm.factory import LLMFactory

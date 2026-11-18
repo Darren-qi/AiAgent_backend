@@ -9,7 +9,7 @@
 - DELETE /users/{id} - 删除用户（管理员）
 """
 
-from fastapi import APIRouter, status, Query
+from fastapi import APIRouter, Query
 
 from app.api.deps import DBSession, CurrentUser, CurrentAdminUser
 from app.core.exceptions import BadRequestException

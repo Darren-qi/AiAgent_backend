@@ -4,7 +4,6 @@
 动态子表发现（不含 sessions）、cleanup_session 编排（收集→删子表→删父→删目录）。
 不连真实 DB：用 FakeDB 记录执行过的语句。
 """
-from pathlib import Path
 
 import pytest
 

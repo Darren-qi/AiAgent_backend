@@ -5,16 +5,16 @@ API 依赖项模块
 这些依赖项可以在路由函数中直接注入使用。
 """
 
-from typing import Annotated, Generator, Optional
+from typing import Annotated, Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.db.session import get_db, AsyncSessionLocal
+from app.db.session import AsyncSessionLocal
 from app.core.security import verify_access_token
 from app.core.exceptions import (
     UnauthorizedException, InvalidTokenException,

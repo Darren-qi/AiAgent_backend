@@ -93,7 +93,7 @@ class AuthService:
             raise InvalidTokenException(detail="无效的令牌载荷")
 
         # 获取用户
-        user = await self.user_service.get_user_by_id(int(user_id))
+        await self.user_service.get_user_by_id(int(user_id))
 
         # 生成新令牌
         token = self._create_tokens(user_id)

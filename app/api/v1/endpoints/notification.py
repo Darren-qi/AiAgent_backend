@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """Notification 端点"""
 
-from typing import List, Optional
+from typing import List
 from fastapi import APIRouter
 
-from app.api.deps import DBSession, CurrentUser
+from app.api.deps import CurrentUser
 from app.api.v1.schemas.notification import NotificationSendRequest, NotificationSendResponse
 from app.agent.tools.notification.manager import NotificationManager
 

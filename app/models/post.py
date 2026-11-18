@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import DateTime, String, Text, Boolean, Integer, ForeignKey
+from sqlalchemy import DateTime, String, Text, Integer, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, IDMixin, TimestampMixin, SoftDeleteMixin

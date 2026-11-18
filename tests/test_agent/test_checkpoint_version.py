@@ -13,7 +13,7 @@
 
 import pytest
 
-from app.agent.execution_state import ExecutionStateManager, TodoStatus
+from app.agent.execution_state import ExecutionStateManager
 
 
 class CasSaver:

@@ -1,7 +1,5 @@
 """LLM 工厂类"""
 
-import os
-import sys
 from typing import Dict, Any, Optional, Type
 
 try:
@@ -10,7 +8,7 @@ try:
 except ImportError:
     pass
 
-from app.agent.llm.types import ModelConfig, ModelProvider, ChatRequest, LLMResponse
+from app.agent.llm.types import ModelProvider, ChatRequest, LLMResponse
 from app.agent.llm.router import ModelRouter
 from app.agent.llm.budget_manager import BudgetManager
 
@@ -93,7 +91,6 @@ class LLMFactory:
 
     def _register_providers(self) -> None:
         """注册所有提供商"""
-        from app.agent.llm.providers import BaseLLMProvider
         from app.agent.llm.providers.deepseek import DeepSeekProvider
         from app.agent.llm.providers.kimi import KimiProvider
         from app.agent.llm.providers.zhipu import ZhipuProvider

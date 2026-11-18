@@ -104,9 +104,6 @@ async def cancellable_wait_for(
     check_interval = min(poll_interval, timeout) if timeout > 0 else poll_interval
     total_waited = 0.0
 
-    # 包装协程，记录是否为 cancelled
-    cancelled = False
-
     while True:
         # 先检查是否已取消
         if cancel_signal.is_cancelled(task_id):

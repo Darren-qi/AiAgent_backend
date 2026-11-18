@@ -4,7 +4,6 @@ import os
 import time
 from typing import AsyncIterator, Dict, Any
 
-import httpx
 from anthropic import AsyncAnthropic
 
 from app.agent.llm.providers.base import BaseLLMProvider

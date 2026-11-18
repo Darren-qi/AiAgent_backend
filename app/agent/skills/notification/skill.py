@@ -1,7 +1,6 @@
 """Notification Skill - 通知发送技能"""
 
 import logging
-from typing import Dict, Any
 
 from app.agent.skills.core.base_skill import BaseSkill, SkillResult
 

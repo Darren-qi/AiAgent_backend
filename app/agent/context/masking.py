@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from .config import ContextConfig
-from .items import AttentionPosition, ContextItem, ItemType, LoadState
+from .items import ContextItem, ItemType, LoadState
 from .scoring import Scorer
 
 # 处理类型常量（可解释性返回用）

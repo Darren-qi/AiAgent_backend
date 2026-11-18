@@ -1,7 +1,6 @@
 """经验检索器"""
 
 import logging
-import json
 from typing import Dict, Any, List, Optional
 
 from app.agent.experience.base import Experience, BaseExperienceStore

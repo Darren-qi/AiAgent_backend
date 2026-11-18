@@ -1,7 +1,6 @@
 """Test Notification services."""
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 import sys
 import os
 

@@ -19,10 +19,9 @@ import json
 import os
 import time
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Callable
 
-from app.agent.state import ExecutionStatus
 
 logger = logging.getLogger(__name__)
 

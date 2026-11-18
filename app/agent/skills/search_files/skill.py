@@ -5,7 +5,7 @@ import re
 import fnmatch
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from app.agent.skills.core.base_skill import BaseSkill, SkillResult
 

@@ -2,8 +2,7 @@
 
 import pytest
 import asyncio
-from typing import Generator, AsyncGenerator
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock
 
 
 @pytest.fixture(autouse=True)

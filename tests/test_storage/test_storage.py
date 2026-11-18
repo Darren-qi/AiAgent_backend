@@ -1,8 +1,7 @@
 """Storage 测试"""
 
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
-from app.agent.tools.storage.manager import StorageManager, StorageProvider
+from app.agent.tools.storage.manager import StorageManager
 
 
 class TestStorageManager:

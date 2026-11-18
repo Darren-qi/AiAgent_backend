@@ -1,6 +1,6 @@
 """执行器节点"""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from app.agent.skills.core.progressive_loader import get_loader
 

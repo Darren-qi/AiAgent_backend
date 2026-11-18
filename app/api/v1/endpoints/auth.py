@@ -1,8 +1,7 @@
 """Auth endpoint module"""
 
-from fastapi import APIRouter, status, Depends, HTTPException
+from fastapi import APIRouter, status
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DBSession, CurrentUser
 from app.core.exceptions import UnauthorizedException

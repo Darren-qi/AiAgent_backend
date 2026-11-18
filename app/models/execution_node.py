@@ -8,9 +8,8 @@
     - execution_nodes: 执行节点表
 """
 
-from datetime import datetime
 from typing import Optional
-from sqlalchemy import String, Text, Integer, Boolean, DateTime, ForeignKey, JSON
+from sqlalchemy import String, Text, Integer, Boolean, ForeignKey, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, IDMixin, TimestampMixin
 

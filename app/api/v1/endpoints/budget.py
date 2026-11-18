@@ -3,7 +3,7 @@
 
 from fastapi import APIRouter
 
-from app.api.deps import DBSession, CurrentUser
+from app.api.deps import CurrentUser
 from app.api.v1.schemas.agent import BudgetStatusResponse
 from app.agent.llm.factory import LLMFactory
 

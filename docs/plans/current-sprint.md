@@ -155,6 +155,7 @@ conversation_messages 115、session_contexts 48、working_memory 32、tasks 32�
 
 | 日期 | 内容 |
 |---|---|
+| 2026-11-19 | **代码巡检+清冗余**：P0 修 3（reranker `datetime` 运行时炸点 / agent.py return 后死代码 / progressive_loader `SkillResult` 运行时实例化未导入）；ruff 清未用 import 150 + 变量 11（`__init__.py` 重导出保留）；删死模块 session.py（148 行与 agent.py 会话 API 重复）+ 两份死路由副本（router.py / v1 __init__，零消费方）+ utils/tasks.py 死脚手架 + `_extract_project_name` 正则穷举；LLMChatMixin 收敛 Planner/Integrator/IntentDetector 三份 `_llm_chat`；杂物清零（tasks/593 + logs/runs 43 + lgc*.json 5）；新增 `scripts/code_audit.sh`（P0>0 退 1）+ skill `backend-code-audit` + cron 每周一 09:00；309 passed，生产 DEPLOY_VERIFIED |
 | 2026-11-18 | **会话级联清理**：删会话时一并删子表（information_schema 动态发现）+ 磁盘任务目录（路径校验/共享目录跳过）；生产清齐芸禾测试数据 2754 行 + 31 目录（已备份）；17 用例 |
 | 2026-11-18 | **阶段八**：写操作幂等（action_journal WAL + 语义白名单 + 原子写）+ 断点可靠性（version 乐观锁 / save 失败上报 / pending_action 写前快照 / TaskManager 终态落库）；292 passed |
 | 2026-11-17 | A–E 随 `36477e1` 提交；工具层 Harness 七阶段全部交付（`2eedc48`→`1c8625c` 共 5 个 feat commit），门禁 229 passed 全绿 |

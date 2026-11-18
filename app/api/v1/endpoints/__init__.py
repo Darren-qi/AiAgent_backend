@@ -1,6 +1,5 @@
 """API v1 endpoints"""
 from app.api.v1.endpoints.agent import router as agent_router
-from app.api.v1.endpoints.session import router as session_router
 from app.api.v1.endpoints.storage import router as storage_router
 from app.api.v1.endpoints.social import router as social_router
 from app.api.v1.endpoints.notification import router as notification_router

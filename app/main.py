@@ -17,7 +17,6 @@ from app.core.exceptions import AppException
 from app.db.session import init_db, close_db
 from app.api.v1.endpoints import (
     agent_router,
-    session_router,
     storage_router,
     social_router,
     notification_router,
@@ -106,7 +105,6 @@ def create_app() -> FastAPI:
         app.add_middleware(RequestLoggingMiddleware, log_body=False, log_headers=False)
 
     app.include_router(agent_router, prefix="/api/v1/agent", tags=["Agent"])
-    app.include_router(session_router, prefix="/api/v1/session", tags=["Session"])
     app.include_router(storage_router, prefix="/api/v1/storage", tags=["Storage"])
     app.include_router(social_router, prefix="/api/v1/social", tags=["Social"])
     app.include_router(notification_router, prefix="/api/v1/notification", tags=["Notification"])

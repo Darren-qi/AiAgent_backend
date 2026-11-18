@@ -8,13 +8,13 @@ from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 import re
 
-from sqlalchemy import select, func, or_, and_
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFoundException, BadRequestException
 from app.models.post import Post, PostStatus, PostVisibility
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.schemas.post import PostCreate, PostUpdate
 
 

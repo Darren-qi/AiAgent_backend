@@ -333,7 +333,6 @@ class SupervisorGraph:
         当某个步骤失败时，生成替代方案。
         """
         failed_action = failed_step.get("action", "")
-        error = failed_step.get("error", "")
 
         alternative_map = {
             "http_client": [

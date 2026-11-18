@@ -14,12 +14,10 @@ from app.agent.graphs.nodes.integrator import Integrator
 from app.agent.graphs.nodes.guard import Guard
 from app.agent.graphs.nodes.replanner import Replanner
 from app.agent.graphs.dynamic_subgraph import DynamicSubgraph
-from app.agent.graphs.supervisor_graph import SupervisorGraph, SupervisorDecision
+from app.agent.graphs.supervisor_graph import SupervisorGraph
 from app.agent.state import (
     ExecutionContext,
     ExecutionStatus,
-    ObservationResult,
-    LoopDetectionResult,
     create_execution_context,
     default_loop_detector,
 )
@@ -1054,8 +1052,6 @@ class AgentGraph:
             todo = todos[i]
             todo_id = todo.id if hasattr(todo, "id") else todo.get("id", i + 1)
             todo_title = todo.title if hasattr(todo, "title") else todo.get("title", "")
-            todo_action = todo.action if hasattr(todo, "action") else todo.get("action", "")
-            todo_params = todo.params if hasattr(todo, "params") else todo.get("params", {})
             todo_status = todo.status if hasattr(todo, "status") else todo.get("status", TodoStatus.PENDING)
 
             # 跳过已完成的待办

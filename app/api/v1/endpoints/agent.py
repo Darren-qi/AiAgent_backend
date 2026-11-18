@@ -12,13 +12,11 @@ import json
 from loguru import logger
 
 from app.api.deps import CurrentUser, OptionalCurrentUser
-from app.db.session import get_db, AsyncSessionLocal
+from app.db.session import AsyncSessionLocal
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.schemas.agent import AgentExecuteRequest, AgentExecuteResponse
 from app.agent.graphs.main_graph import AgentGraph
 from app.agent.memory.manager import MemoryManager
-from app.agent.llm.factory import LLMFactory
-from app.agent.tools.storage.manager import StorageManager
 from app.agent.task_executor import task_manager
 from app.security.input_guard import InputGuard
 from app.security.output_guard import OutputGuard
@@ -153,7 +151,6 @@ async def execute_task(
 
     # 确保会话在数据库中存在（否则 execution_nodes 外键会失败）。
     # 落库失败必须显式报错——旧版静默降级内存存储，"看似成功、刷新全丢"
-    session_created = False
     try:
         async with AsyncSessionLocal() as db2:
             from sqlalchemy import select
@@ -172,7 +169,6 @@ async def execute_task(
                 )
                 db2.add(db_session)
                 await db2.commit()
-                session_created = True
                 logger.info(f"[Agent] 创建数据库会话: {session_id}")
             else:
                 logger.debug(f"[Agent] 会话已存在: {session_id}")
@@ -231,7 +227,6 @@ async def execute_task_stream(
     db = AsyncSessionLocal()
 
     # 确保会话在数据库中存在（否则 execution_nodes 外键会失败）
-    session_created = False
     logger.info(f"[Agent] 检查会话是否存在: {session_id}")
     try:
         # 检查会话是否已存在
@@ -254,7 +249,6 @@ async def execute_task_stream(
             )
             db.add(db_session)
             await db.commit()
-            session_created = True
             logger.info(f"[Agent] 创建数据库会话成功: {session_id}")
         else:
             # 兜底创建方（main_graph 里那段）会写死 user_id=0 / title="Agent Session"，
@@ -547,7 +541,6 @@ async def ping_task(task_id: str) -> Dict[str, Any]:
 @router.post("/abort/{task_id}")
 async def abort_task(task_id: str, user: OptionalCurrentUser = None) -> Dict[str, Any]:
     """中止任务"""
-    import logging
     from app.agent.cancel_signal import cancel_signal
 
     logger.info(f"[ABORT] 收到 abort 请求: {task_id}")
@@ -574,9 +567,6 @@ async def abort_task(task_id: str, user: OptionalCurrentUser = None) -> Dict[str
         "stopped": stopped,
         "cancelled": running_info is not None,
     }
-
-    logger.warning(f"[ABORT] ====== abort 完成: {task_id}, task_manager={stopped} ======")
-    return {"task_id": task_id, "aborted": True, "cancelled": True}
 
 
 # ============ 前端兼容的会话端点 ============
@@ -940,10 +930,6 @@ async def create_session(
     session_id = request.session_id or f"session_{datetime.datetime.now().timestamp()}"
     now = datetime.datetime.now().isoformat() + "Z"
 
-    project_name = None
-    if request.user_input:
-        project_name = _extract_project_name(request.user_input)
-
     # 注意：不在 create-session 时创建任务目录
     # 任务目录在 execute/stream 首次执行时才创建（带时间戳），后续复用同一目录
     # 这样确保每个会话只有一个任务目录，避免多次创建带不同时间戳的目录
@@ -994,24 +980,6 @@ async def create_session(
             "task_path": task_folder,
         }
     }
-
-
-def _extract_project_name(task: str) -> Optional[str]:
-    """从任务描述中提取项目名称"""
-    import re
-    # 尝试匹配 "创建一个 XXX 项目" 或 "生成 XXX 应用" 等模式
-    patterns = [
-        r'(?:创建|生成|开发|构建|制作)\s*`?([a-zA-Z_][a-zA-Z0-9_]*)',
-        r'(?:项目|应用|应用|系统|网站|平台|工具)\s*`?([a-zA-Z_][a-zA-Z0-9_]*)',
-        r'`([a-zA-Z_][a-zA-Z0-9_]*(?:_project|_app|_project|_system)?)`',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, task)
-        if match:
-            name = match.group(1).strip()
-            if len(name) >= 2:
-                return name
-    return None
 
 
 @router.delete("/execute/")

@@ -3,7 +3,6 @@ API v1 Schemas 通用模型
 """
 
 from typing import Generic, TypeVar, Optional, List, Any
-from datetime import datetime
 from pydantic import BaseModel, Field
 
 

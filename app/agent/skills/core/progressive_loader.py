@@ -8,7 +8,6 @@
 """
 
 import asyncio
-import os
 import re
 import sys
 import yaml
@@ -17,6 +16,7 @@ import importlib
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Set, Callable
 from dataclasses import dataclass, field
+from app.agent.skills.core.base_skill import SkillResult
 
 logger = logging.getLogger(__name__)
 

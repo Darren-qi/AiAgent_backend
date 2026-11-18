@@ -5,7 +5,6 @@ Task Manager - 任务状态管理模块
 被 agent.py 和 main_graph.py 使用。
 """
 
-import asyncio
 import logging
 from enum import Enum
 from typing import Dict, Any

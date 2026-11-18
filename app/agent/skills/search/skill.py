@@ -3,7 +3,6 @@
 import json
 import re
 import logging
-from typing import Dict, Any
 
 from app.agent.skills.core.base_skill import BaseSkill, SkillResult
 from app.agent.llm.factory import LLMFactory

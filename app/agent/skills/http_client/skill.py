@@ -1,7 +1,6 @@
 """HTTP Client Skill - HTTP 客户端技能"""
 
 import httpx
-from typing import Dict, Any
 
 from app.agent.skills.core.base_skill import BaseSkill, SkillResult
 

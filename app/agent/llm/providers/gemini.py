@@ -2,9 +2,8 @@
 
 import os
 import time
-from typing import AsyncIterator, Dict, Any, Optional
+from typing import AsyncIterator, Dict, Any
 
-import httpx
 from openai import AsyncOpenAI
 
 from app.agent.llm.providers.base import BaseLLMProvider

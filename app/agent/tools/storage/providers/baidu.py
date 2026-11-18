@@ -30,7 +30,6 @@ class BaiduBOSProvider(BaseStorageProvider):
 
         try:
             from baidubce import bce_base_config
-            from baidubce.services import bos
             from baidubce.services.bos import BosService
 
             config = bce_base_config.Config(

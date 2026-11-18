@@ -13,12 +13,11 @@
 
 from fastapi import APIRouter, status, Query
 
-from app.api.deps import DBSession, CurrentUser, CurrentAdminUser, OptionalCurrentUser
-from app.models.post import PostStatus, PostVisibility
+from app.api.deps import DBSession, CurrentUser, OptionalCurrentUser
+from app.models.post import PostStatus
 from app.schemas.post import (
     PostCreate,
     PostUpdate,
-    PostPublish,
     PostResponse,
     PostListItem,
 )

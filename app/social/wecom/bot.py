@@ -1,6 +1,6 @@
 """企业微信机器人"""
 
-from typing import Dict, Any, Optional
+from typing import Optional
 import httpx
 
 

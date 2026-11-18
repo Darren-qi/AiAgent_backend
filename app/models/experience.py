@@ -16,10 +16,9 @@
     - session_files: 会话文件表
 """
 
-from datetime import datetime
-from typing import Optional, List
-from sqlalchemy import String, Text, Integer, Boolean, DateTime, ForeignKey, JSON, Float
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from typing import Optional
+from sqlalchemy import String, Text, Integer, Boolean, ForeignKey, JSON, Float
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import Index
 from app.db.base import Base, IDMixin, TimestampMixin
 

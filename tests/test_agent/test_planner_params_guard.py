@@ -20,7 +20,6 @@ edits、无批量规模）。
 全量 schema（含 files/edits）+调用须知（渐进第二/三级在错误时注入）。
 """
 
-import pytest
 
 from app.agent.graphs.nodes.planner import Planner
 

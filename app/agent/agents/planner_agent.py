@@ -3,7 +3,7 @@
 import json
 import re
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
 from app.agent.agents.base import BaseAgent, AgentType, AgentResult
 from app.agent.skills import get_loader
