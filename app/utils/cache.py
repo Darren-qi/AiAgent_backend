@@ -8,7 +8,7 @@ Redis 缓存模块
 """
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 import redis.asyncio as redis
 from redis.asyncio import Redis
@@ -23,10 +23,10 @@ class CacheManager:
     提供异步 Redis 缓存操作。
     """
 
-    def __init__(self, redis_url: Optional[str] = None):
+    def __init__(self, redis_url: str | None = None):
         self.settings = get_settings()
         self.redis_url = redis_url or self.settings.redis_url
-        self._client: Optional[Redis] = None
+        self._client: Redis | None = None
 
     async def connect(self) -> None:
         """建立 Redis 连接"""
@@ -50,7 +50,7 @@ class CacheManager:
             raise RuntimeError("Redis 未连接，请先调用 connect()")
         return self._client
 
-    async def get(self, key: str) -> Optional[Any]:
+    async def get(self, key: str) -> Any | None:
         """
         获取缓存值
 
@@ -73,7 +73,7 @@ class CacheManager:
         self,
         key: str,
         value: Any,
-        expire: Optional[int] = None,
+        expire: int | None = None,
     ) -> bool:
         """
         设置缓存值
@@ -138,7 +138,7 @@ class CacheManager:
     async def set_many(
         self,
         mapping: dict[str, Any],
-        expire: Optional[int] = None,
+        expire: int | None = None,
     ) -> None:
         """批量设置缓存"""
         if not mapping:
@@ -175,7 +175,7 @@ class CacheManager:
         self,
         key: str,
         func,
-        expire: Optional[int] = None,
+        expire: int | None = None,
         *args,
         **kwargs,
     ):
@@ -211,12 +211,12 @@ cache_manager = CacheManager()
 # 便捷函数
 # =============================================
 
-async def get_cache(key: str) -> Optional[Any]:
+async def get_cache(key: str) -> Any | None:
     """获取缓存值"""
     return await cache_manager.get(key)
 
 
-async def set_cache(key: str, value: Any, expire: Optional[int] = None) -> bool:
+async def set_cache(key: str, value: Any, expire: int | None = None) -> bool:
     """设置缓存值"""
     return await cache_manager.set(key, value, expire)
 

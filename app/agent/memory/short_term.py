@@ -1,6 +1,6 @@
 """短期记忆模块"""
 
-from typing import Any, Dict, Optional, List
+from typing import Any
 
 from app.agent.memory.base import BaseMemory
 from app.agent.memory.pgsaver import PostgresSaver
@@ -12,12 +12,12 @@ class ConversationBuffer:
     def __init__(
         self,
         max_messages: int = 50,
-        db_saver: Optional[PostgresSaver] = None,
+        db_saver: PostgresSaver | None = None,
     ):
         self.max_messages = max_messages
         self.db_saver = db_saver
-        self._messages: List[Dict[str, Any]] = []
-        self._session_id: Optional[str] = None
+        self._messages: list[dict[str, Any]] = []
+        self._session_id: str | None = None
 
     def set_session(self, session_id: str) -> None:
         """设置会话ID"""
@@ -27,7 +27,7 @@ class ConversationBuffer:
         self,
         role: str,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """添加消息（同步到内存，异步保存到数据库）"""
         self._messages.append({
@@ -48,7 +48,7 @@ class ConversationBuffer:
                 metadata=metadata,
             )
 
-    def get_messages(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_messages(self, limit: int | None = None) -> list[dict[str, Any]]:
         """获取消息"""
         if limit is None:
             return self._messages.copy()
@@ -65,12 +65,12 @@ class WorkingMemory(BaseMemory):
     def __init__(
         self,
         max_items: int = 10,
-        db_saver: Optional[PostgresSaver] = None,
+        db_saver: PostgresSaver | None = None,
     ):
         self.max_items = max_items
         self.db_saver = db_saver
-        self._memory: Dict[str, Any] = {}
-        self._session_id: Optional[str] = None
+        self._memory: dict[str, Any] = {}
+        self._session_id: str | None = None
 
     def set_session(self, session_id: str) -> None:
         """设置会话ID"""
@@ -91,7 +91,7 @@ class WorkingMemory(BaseMemory):
                 memory_value=value,
             )
 
-    async def get(self, key: str) -> Optional[Any]:
+    async def get(self, key: str) -> Any | None:
         """获取记忆"""
         return self._memory.get(key)
 
@@ -110,7 +110,7 @@ class WorkingMemory(BaseMemory):
         """清空记忆"""
         self._memory = {}
 
-    async def get_all(self) -> Dict[str, Any]:
+    async def get_all(self) -> dict[str, Any]:
         """获取所有记忆"""
         return self._memory.copy()
 
@@ -122,8 +122,8 @@ class ShortTermMemory:
         self,
         max_messages: int = 50,
         max_items: int = 10,
-        db_saver: Optional[PostgresSaver] = None,
-        session_id: Optional[str] = None,
+        db_saver: PostgresSaver | None = None,
+        session_id: str | None = None,
     ):
         self.conversation = ConversationBuffer(
             max_messages=max_messages,
@@ -142,12 +142,12 @@ class ShortTermMemory:
         self,
         role: str,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """添加对话消息"""
         await self.conversation.add_message(role, content, metadata)
 
-    def get_messages(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_messages(self, limit: int | None = None) -> list[dict[str, Any]]:
         """获取对话消息"""
         return self.conversation.get_messages(limit)
 
@@ -155,7 +155,7 @@ class ShortTermMemory:
         """设置工作记忆"""
         await self.working.add(key, value)
 
-    async def get_working(self, key: str) -> Optional[Any]:
+    async def get_working(self, key: str) -> Any | None:
         """获取工作记忆"""
         return await self.working.get(key)
 

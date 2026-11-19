@@ -9,14 +9,13 @@
 
 import sys
 from pathlib import Path
-from typing import Optional
 
 from loguru import logger
 
 
 def setup_logger(
     log_level: str = "INFO",
-    log_file_path: Optional[str] = None,
+    log_file_path: str | None = None,
     enable_console: bool = True,
 ) -> None:
     """
@@ -84,7 +83,7 @@ def setup_logger(
     logger.configure(handlers=[])
 
 
-def get_logger(name: Optional[str] = None):
+def get_logger(name: str | None = None):
     """
     获取日志记录器
 

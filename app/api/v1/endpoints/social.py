@@ -3,9 +3,9 @@
 
 from fastapi import APIRouter
 
+from app.agent.tools.social.manager import SocialManager
 from app.api.deps import CurrentUser
 from app.api.v1.schemas.social import SocialSendRequest, SocialSendResponse
-from app.agent.tools.social.manager import SocialManager
 
 router = APIRouter()
 social_manager = SocialManager()

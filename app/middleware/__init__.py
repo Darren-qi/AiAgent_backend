@@ -6,8 +6,8 @@ Middleware 模块 __init__.py
 
 from app.middleware.request_id import (
     RequestIDMiddleware,
-    RequestTimingMiddleware,
     RequestLoggingMiddleware,
+    RequestTimingMiddleware,
     get_request_id,
     get_request_id_header,
     request_id_ctx,

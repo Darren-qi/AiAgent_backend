@@ -1,8 +1,9 @@
 """Test Agent components."""
 
-import pytest
-import sys
 import os
+import sys
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
@@ -37,8 +38,8 @@ class TestIntegratorNode:
     @pytest.mark.asyncio
     async def test_integrate_single_result(self):
         """测试单结果整合（现契约：async + AgentState，2026-11-13 对齐）"""
-        from app.agent.graphs.nodes.integrator import Integrator
         from app.agent.graphs.main_graph import AgentState
+        from app.agent.graphs.nodes.integrator import Integrator
 
         integrator = Integrator()
         state = AgentState(results=[{"content": "Python is a programming language"}])
@@ -48,8 +49,8 @@ class TestIntegratorNode:
     @pytest.mark.asyncio
     async def test_integrate_multiple_results(self):
         """测试多结果整合"""
-        from app.agent.graphs.nodes.integrator import Integrator
         from app.agent.graphs.main_graph import AgentState
+        from app.agent.graphs.nodes.integrator import Integrator
 
         integrator = Integrator()
         state = AgentState(results=[
@@ -67,8 +68,9 @@ class TestDynamicSubgraph:
     async def test_sequential_execution(self):
         """测试顺序执行模式（现契约：返回 {results,error}、步骤键是 action，
         2026-11-13 黄金测试集对齐；用真实 file_operations 串行写两文件）"""
-        import time as _t
         import shutil
+        import time as _t
+
         from app.agent.graphs.dynamic_subgraph import DynamicSubgraph
         from app.agent.skills.file_operations.skill import skill as fo_skill
 

@@ -12,14 +12,13 @@ session_id 查 key 并 set 进 contextvar，factory.chat 在 DeepSeek
 """
 
 import contextvars
-from typing import Optional, Tuple
 
 # 本 turn（task）的用户 DeepSeek key；空串 = 用系统 key。
 _user_api_key: contextvars.ContextVar[str] = contextvars.ContextVar(
     "user_deepseek_api_key", default="")
 
 
-def set_user_api_key(key: Optional[str]) -> None:
+def set_user_api_key(key: str | None) -> None:
     """设定本 turn 的用户 key（空串/None = 清除，回落系统 key）。"""
     _user_api_key.set((key or "").strip())
 
@@ -29,7 +28,7 @@ def get_user_api_key() -> str:
     return _user_api_key.get()
 
 
-def mask_key(key: Optional[str]) -> str:
+def mask_key(key: str | None) -> str:
     """掩码显示：sk-abcdef123456 → sk-***3456；短于8位 → ***；空 → ''。"""
     k = (key or "").strip()
     if not k:
@@ -39,12 +38,13 @@ def mask_key(key: Optional[str]) -> str:
     return f"{k[:3]}***{k[-4:]}"
 
 
-async def load_user_deepseek_key(session_id: Optional[str]) -> str:
+async def load_user_deepseek_key(session_id: str | None) -> str:
     """按 session → user 查用户自己的 key；查不到 / 任何失败返回 ''。"""
     if not session_id:
         return ""
     try:
         from sqlalchemy import select
+
         from app.db.session import AsyncSessionLocal
         from app.models.experience import SessionModel
         from app.models.user import User
@@ -62,7 +62,7 @@ async def load_user_deepseek_key(session_id: Optional[str]) -> str:
         return ""
 
 
-async def apply_turn_user_api_key(session_id: Optional[str]) -> None:
+async def apply_turn_user_api_key(session_id: str | None) -> None:
     """每 turn 开始时装载本 turn 的用户 key；失败清空（回落系统 key）。"""
     try:
         set_user_api_key(await load_user_deepseek_key(session_id))
@@ -70,7 +70,7 @@ async def apply_turn_user_api_key(session_id: Optional[str]) -> None:
         set_user_api_key("")
 
 
-async def validate_deepseek_key(key: str) -> Tuple[bool, str]:
+async def validate_deepseek_key(key: str) -> tuple[bool, str]:
     """保存前用 DeepSeek GET /models（免费、轻量）验证 key。
 
     返回 (是否有效, 错误信息)。网络异常也拒绝保存，避免存入坏 key。

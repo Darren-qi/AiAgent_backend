@@ -1,11 +1,11 @@
 """IMAP 邮件接收器"""
 
-import os
-from typing import List, Optional, Dict, Any
-from dataclasses import dataclass
-import imaplib
 import email
+import imaplib
+import os
+from dataclasses import dataclass
 from email.header import decode_header
+from typing import Any
 
 
 @dataclass
@@ -14,11 +14,11 @@ class EmailMessage:
     message_id: str
     subject: str
     from_address: str
-    to_addresses: List[str]
+    to_addresses: list[str]
     date: str
     body: str
-    html_body: Optional[str] = None
-    attachments: Optional[List[Dict[str, Any]]] = None
+    html_body: str | None = None
+    attachments: list[dict[str, Any]] | None = None
 
 
 class EmailReceiver:
@@ -58,7 +58,7 @@ class EmailReceiver:
         else:
             return imaplib.IMAP4(self.imap_host, self.imap_port)
 
-    async def fetch_unread(self, folder: str = "INBOX", limit: int = 10) -> List[EmailMessage]:
+    async def fetch_unread(self, folder: str = "INBOX", limit: int = 10) -> list[EmailMessage]:
         """获取未读邮件"""
         try:
             mail = self.connect()
@@ -103,7 +103,7 @@ class EmailReceiver:
         except Exception as e:
             raise Exception(f"获取邮件失败: {e}")
 
-    async def process_commands(self, callback) -> List[Dict[str, Any]]:
+    async def process_commands(self, callback) -> list[dict[str, Any]]:
         """处理邮件中的命令"""
         messages = await self.fetch_unread()
         results = []

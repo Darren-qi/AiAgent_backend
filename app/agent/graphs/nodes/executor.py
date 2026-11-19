@@ -1,6 +1,6 @@
 """执行器节点"""
 
-from typing import Any, Dict
+from typing import Any
 
 from app.agent.skills.core.progressive_loader import get_loader
 
@@ -11,7 +11,7 @@ class Executor:
     def __init__(self):
         self._loader = get_loader()
 
-    async def execute_step(self, step: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute_step(self, step: dict[str, Any]) -> dict[str, Any]:
         """执行单个步骤"""
         action = step.get("action")
         params = step.get("params", {})

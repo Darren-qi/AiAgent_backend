@@ -16,12 +16,12 @@
 
 import hashlib
 import json
+import logging
 import os
 import time
-import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, Callable
-
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +43,13 @@ class TodoItem:
     description: str = ""
     status: str = TodoStatus.PENDING
     action: str = ""
-    params: Dict[str, Any] = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
     result: str = ""
     error: str = ""
     created_at: int = 0
-    completed_at: Optional[int] = None
+    completed_at: int | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "title": self.title,
@@ -64,7 +64,7 @@ class TodoItem:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "TodoItem":
+    def from_dict(cls, d: dict[str, Any]) -> "TodoItem":
         return cls(
             id=d.get("id", ""),
             title=d.get("title", ""),
@@ -83,11 +83,11 @@ class TodoItem:
 class ActionResult:
     """Action 执行结果"""
     action_name: str
-    action_input: Dict[str, Any]
+    action_input: dict[str, Any]
     observation: str
     success: bool
-    error: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class ExecutionStateManager:
@@ -110,7 +110,7 @@ class ExecutionStateManager:
         session_id: str,
         task_id: str,
         user_input: str = "",
-        max_iterations: Optional[int] = None,
+        max_iterations: int | None = None,
         max_scratchpad_length: int = 3000,
     ):
         self.session_id = session_id
@@ -121,19 +121,19 @@ class ExecutionStateManager:
         self.max_scratchpad_length = max_scratchpad_length
 
         # 核心状态
-        self.todos: List[TodoItem] = []
+        self.todos: list[TodoItem] = []
         self.current_todo_index: int = 0
         self.iteration: int = 0
         self.scratchpad: str = ""
-        self.errors: List[Dict[str, Any]] = []
+        self.errors: list[dict[str, Any]] = []
         # 失败收尾断点标记（2026-11-14 用户定：失败也支持断点继续）：
         # 非空=上一轮以失败收尾，随状态落库，下一轮由 cap_restore 判续/弃
         self.failed_error: str = ""
         # 阶段八 P1：执行中的动作标记（写前快照）。非空=上一次落库时
         # 某个 action 正在执行 → 崩溃/超时后恢复能知道"卡在哪一步"。
-        self.pending_action: Optional[Dict[str, Any]] = None
-        self.last_action_result: Optional[ActionResult] = None
-        self._is_running: Optional[Callable[[], bool]] = None
+        self.pending_action: dict[str, Any] | None = None
+        self.last_action_result: ActionResult | None = None
+        self._is_running: Callable[[], bool] | None = None
         self._pg_saver = None
 
         # 阶段八 P1：断点可靠性
@@ -144,7 +144,7 @@ class ExecutionStateManager:
         self._version: int = 0
         self.save_failures: int = 0
         self.last_save_error: str = ""
-        self.on_checkpoint_error: Optional[Callable[[str, Dict[str, Any]], None]] = None
+        self.on_checkpoint_error: Callable[[str, dict[str, Any]], None] | None = None
 
         self._init_scratchpad()
 
@@ -180,7 +180,7 @@ class ExecutionStateManager:
 
     # ============== 待办列表管理 ==============
 
-    def set_todos(self, todos: List[Dict[str, Any]]):
+    def set_todos(self, todos: list[dict[str, Any]]):
         """设置待办列表（从 planner 获取）"""
         self.todos = []
         for i, todo in enumerate(todos):
@@ -197,7 +197,7 @@ class ExecutionStateManager:
         for i, todo in enumerate(self.todos):
             self._append_scratchpad(f"  {i+1}. {todo.title} [{todo.action}]\n")
 
-    def get_current_todo(self) -> Optional[TodoItem]:
+    def get_current_todo(self) -> TodoItem | None:
         """获取当前待办项"""
         idx = self.current_todo_index
         if 0 <= idx < len(self.todos):
@@ -206,7 +206,7 @@ class ExecutionStateManager:
                 return todo
         return None
 
-    def get_next_pending_todo(self) -> Optional[TodoItem]:
+    def get_next_pending_todo(self) -> TodoItem | None:
         """获取下一个待处理的待办项"""
         for i, todo in enumerate(self.todos):
             if todo.status == TodoStatus.PENDING:
@@ -252,7 +252,7 @@ class ExecutionStateManager:
                 self.errors.append({"todo_id": todo_id, "error": error})
                 break
 
-    def update_todo_params(self, todo_id: str, params: Dict[str, Any]):
+    def update_todo_params(self, todo_id: str, params: dict[str, Any]):
         """更新待办项的参数"""
         for todo in self.todos:
             if todo.id == todo_id:
@@ -277,7 +277,7 @@ class ExecutionStateManager:
     def append_thought(self, thought: str):
         self._append_scratchpad(f"\n【思考】{thought[:300]}\n")
 
-    def append_action(self, action_name: str, action_input: Dict[str, Any]):
+    def append_action(self, action_name: str, action_input: dict[str, Any]):
         input_str = json.dumps(action_input, ensure_ascii=False)[:300]
         self._append_scratchpad(f"\n行动: {action_name}\n输入: {input_str}\n")
 
@@ -507,7 +507,7 @@ class ExecutionStateManager:
             )
             self.pending_action = None
 
-    def begin_pending_action(self, action: str, params: Dict[str, Any]):
+    def begin_pending_action(self, action: str, params: dict[str, Any]):
         """执行 action 前记入快照（阶段八 P1，配合 save_state 做写前落库）。
 
         只存动作名 + 参数摘要（sha256 前 8 位）：快照会进前端/日志，
@@ -530,7 +530,7 @@ class ExecutionStateManager:
         """动作收尾（无论成败）：把"正在执行"标记清掉。"""
         self.pending_action = None
 
-    def get_recovery_info(self) -> Dict[str, Any]:
+    def get_recovery_info(self) -> dict[str, Any]:
         """获取恢复信息摘要（用于前端显示）"""
         return {
             "todos": [t.to_dict() for t in self.todos],

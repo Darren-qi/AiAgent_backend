@@ -1,8 +1,8 @@
 """飞书客户端"""
 
 import os
+
 import httpx
-from typing import Optional
 
 
 class FeishuClient:
@@ -12,7 +12,7 @@ class FeishuClient:
         self.app_id = os.environ.get("FEISHU_APP_ID", "")
         self.app_secret = os.environ.get("FEISHU_APP_SECRET", "")
         self.base_url = "https://open.feishu.cn/open-apis"
-        self._access_token: Optional[str] = None
+        self._access_token: str | None = None
 
     async def _get_access_token(self) -> str:
         """获取访问令牌"""

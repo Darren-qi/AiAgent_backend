@@ -11,25 +11,24 @@
 
 from fastapi import APIRouter, Query
 
-from app.api.deps import DBSession, CurrentUser, CurrentAdminUser
+from app.api.deps import CurrentAdminUser, CurrentUser, DBSession
 from app.core.exceptions import BadRequestException
 from app.models.user import UserRole, UserStatus
-from app.schemas.user import (
-    UserResponse,
-    UserListResponse,
-    UserUpdate,
-    UserPasswordUpdate,
-    UserAdminUpdate,
-    UserLLMKeyUpdate,
-    LLMKeyStatus,
-)
 from app.schemas.common import (
     PageMeta,
     PageResponse,
     SuccessResponse,
 )
+from app.schemas.user import (
+    LLMKeyStatus,
+    UserAdminUpdate,
+    UserListResponse,
+    UserLLMKeyUpdate,
+    UserPasswordUpdate,
+    UserResponse,
+    UserUpdate,
+)
 from app.services.user import UserService
-
 
 router = APIRouter()
 

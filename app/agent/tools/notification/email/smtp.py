@@ -2,11 +2,11 @@
 
 import os
 import uuid
-from typing import List, Optional, Dict
-import aiosmtplib
+from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.header import Header
+
+import aiosmtplib
 
 
 class EmailSender:
@@ -28,11 +28,11 @@ class EmailSender:
 
     async def send(
         self,
-        to: List[str],
+        to: list[str],
         subject: str,
         content: str,
         html: bool = False,
-        attachments: Optional[List[Dict[str, bytes]]] = None
+        attachments: list[dict[str, bytes]] | None = None
     ) -> str:
         """发送邮件"""
         if not self.is_configured:
@@ -79,16 +79,16 @@ class EmailSender:
 
     async def send_template(
         self,
-        to: List[str],
+        to: list[str],
         subject: str,
         template_name: str,
-        template_data: Dict[str, str]
+        template_data: dict[str, str]
     ) -> str:
         """使用模板发送邮件"""
         template_content = self._get_template(template_name, template_data)
         return await self.send(to=to, subject=subject, content=template_content, html=True)
 
-    def _get_template(self, template_name: str, data: Dict[str, str]) -> str:
+    def _get_template(self, template_name: str, data: dict[str, str]) -> str:
         """获取邮件模板"""
         templates = {
             "task_complete": """

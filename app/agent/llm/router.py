@@ -1,13 +1,13 @@
 """模型路由器"""
 
 import os
-from typing import Dict, List, Optional, Any
+from typing import Any
 
-from app.agent.llm.types import ModelConfig, ModelProvider, ModelCapability
+from app.agent.llm.routers.balance_strategy import BalanceStrategy
 from app.agent.llm.routers.base import BaseRouter
 from app.agent.llm.routers.cost_strategy import CostStrategy
 from app.agent.llm.routers.quality_strategy import QualityStrategy
-from app.agent.llm.routers.balance_strategy import BalanceStrategy
+from app.agent.llm.types import ModelCapability, ModelConfig, ModelProvider
 
 
 class ModelRouter:
@@ -24,16 +24,16 @@ class ModelRouter:
         ModelProvider.MINIMAX: "app.agent.llm.providers.minimax.MiniMaxProvider",
     }
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         self.config = config
-        self.strategies: Dict[str, BaseRouter] = {
+        self.strategies: dict[str, BaseRouter] = {
             "cost": CostStrategy(),
             "quality": QualityStrategy(),
             "balance": BalanceStrategy(),
         }
         self.default_strategy = config.get("default_strategy", "balance")
 
-    def get_available_models(self) -> List[ModelConfig]:
+    def get_available_models(self) -> list[ModelConfig]:
         """获取所有可用的模型配置"""
         models = []
 
@@ -81,7 +81,7 @@ class ModelRouter:
             capabilities=[ModelCapability.CHAT, ModelCapability.FUNCTION_CALLING],
         )
 
-    def _get_model_cost(self, provider: ModelProvider) -> Dict[str, float]:
+    def _get_model_cost(self, provider: ModelProvider) -> dict[str, float]:
         """获取模型成本信息"""
         costs = {
             ModelProvider.DEEPSEEK: {"input": 0.0001, "output": 0.0003},
@@ -97,9 +97,9 @@ class ModelRouter:
 
     def select_model(
         self,
-        strategy: Optional[str] = None,
-        required_capabilities: Optional[List[ModelCapability]] = None,
-    ) -> Optional[ModelConfig]:
+        strategy: str | None = None,
+        required_capabilities: list[ModelCapability] | None = None,
+    ) -> ModelConfig | None:
         """根据策略选择模型"""
         strategy_name = strategy or self.default_strategy
 

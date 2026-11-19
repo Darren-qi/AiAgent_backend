@@ -10,15 +10,14 @@
 
 import time
 import uuid
+from collections.abc import Callable
 from contextvars import ContextVar
-from typing import Callable
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from app.utils.logger import log_info, log_debug, log_error
-
+from app.utils.logger import log_debug, log_error, log_info
 
 # 上下文变量，用于在日志中记录请求 ID
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="")

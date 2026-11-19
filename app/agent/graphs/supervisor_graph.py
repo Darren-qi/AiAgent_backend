@@ -1,8 +1,8 @@
 """监督图 - 支持步骤级评估和智能决策"""
 
 import logging
-from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class SupervisorDecision:
     """监督决策"""
     action: str
     reason: str
-    next_step: Optional[int] = None
+    next_step: int | None = None
 
 
 class SupervisorGraph:
@@ -57,7 +57,7 @@ class SupervisorGraph:
 
     async def evaluate(
         self,
-        state: Dict[str, Any]
+        state: dict[str, Any]
     ) -> SupervisorDecision:
         """
         评估当前状态，做出决策
@@ -113,7 +113,7 @@ class SupervisorGraph:
 
     async def evaluate_step_results(
         self,
-        results: List[Dict[str, Any]]
+        results: list[dict[str, Any]]
     ) -> SupervisorDecision:
         """
         评估一组步骤执行结果
@@ -200,7 +200,7 @@ class SupervisorGraph:
 
     def should_retry(
         self,
-        step_result: Dict[str, Any],
+        step_result: dict[str, Any],
         retry_count: int = 0,
         max_retries: int = 3
     ) -> bool:
@@ -280,7 +280,7 @@ class SupervisorGraph:
     async def should_human_confirm(
         self,
         task: str,
-        planned_actions: List[str]
+        planned_actions: list[str]
     ) -> bool:
         """
         判断是否需要人工确认
@@ -305,7 +305,7 @@ class SupervisorGraph:
         self,
         current_model: str,
         budget_percentage: float
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         建议模型降级
 
@@ -324,9 +324,9 @@ class SupervisorGraph:
 
     async def generate_recovery_plan(
         self,
-        failed_step: Dict[str, Any],
-        context: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+        failed_step: dict[str, Any],
+        context: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         """
         生成恢复计划
 
@@ -358,8 +358,8 @@ class SupervisorGraph:
 
     async def evaluate_step(
         self,
-        step: Dict[str, Any],
-        step_result: Dict[str, Any]
+        step: dict[str, Any],
+        step_result: dict[str, Any]
     ) -> SupervisorDecision:
         """
         评估单个步骤的执行结果

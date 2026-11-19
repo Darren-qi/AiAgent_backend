@@ -10,12 +10,12 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, String, Text, Boolean
+from sqlalchemy import Boolean, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, IDMixin, TimestampMixin, SoftDeleteMixin
+from app.db.base import Base, IDMixin, SoftDeleteMixin, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.post import Post
@@ -91,21 +91,21 @@ class User(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
     )
 
     # 昵称（可选）
-    nickname: Mapped[Optional[str]] = mapped_column(
+    nickname: Mapped[str | None] = mapped_column(
         String(100),
         nullable=True,
         comment="昵称",
     )
 
     # 头像 URL
-    avatar: Mapped[Optional[str]] = mapped_column(
+    avatar: Mapped[str | None] = mapped_column(
         String(500),
         nullable=True,
         comment="头像URL",
     )
 
     # 个人简介
-    bio: Mapped[Optional[str]] = mapped_column(
+    bio: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="个人简介",
@@ -131,21 +131,21 @@ class User(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
     )
 
     # 邮箱验证码令牌（用于验证流程）
-    email_verification_token: Mapped[Optional[str]] = mapped_column(
+    email_verification_token: Mapped[str | None] = mapped_column(
         String(255),
         nullable=True,
         comment="邮箱验证令牌",
     )
 
     # 重置密码令牌
-    password_reset_token: Mapped[Optional[str]] = mapped_column(
+    password_reset_token: Mapped[str | None] = mapped_column(
         String(255),
         nullable=True,
         comment="密码重置令牌",
     )
 
     # 重置令牌过期时间
-    password_reset_expires: Mapped[Optional[datetime]] = mapped_column(
+    password_reset_expires: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         comment="密码重置令牌过期时间",
@@ -153,7 +153,7 @@ class User(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
 
     # 用户自己的 DeepSeek API Key（2026-11-14）：填写后该用户的 LLM 调用
     # 走用户自己的 key 计费；NULL = 使用系统 key。接口只回掩码不回全文。
-    deepseek_api_key: Mapped[Optional[str]] = mapped_column(
+    deepseek_api_key: Mapped[str | None] = mapped_column(
         String(255),
         nullable=True,
         comment="用户DeepSeek API Key",
@@ -191,7 +191,7 @@ class User(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
     )
 
     # 最后登录时间
-    last_login_at: Mapped[Optional[datetime]] = mapped_column(
+    last_login_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         comment="最后登录时间",
@@ -202,7 +202,7 @@ class User(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
     # =========================================
 
     # 用户发布的文章（一对多）
-    posts: Mapped[List["Post"]] = relationship(
+    posts: Mapped[list["Post"]] = relationship(
         "Post",
         back_populates="author",
         foreign_keys="Post.author_id",

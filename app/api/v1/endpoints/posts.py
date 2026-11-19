@@ -11,23 +11,22 @@
 - POST /posts/{id}/archive - 归档文章
 """
 
-from fastapi import APIRouter, status, Query
+from fastapi import APIRouter, Query, status
 
-from app.api.deps import DBSession, CurrentUser, OptionalCurrentUser
+from app.api.deps import CurrentUser, DBSession, OptionalCurrentUser
 from app.models.post import PostStatus
-from app.schemas.post import (
-    PostCreate,
-    PostUpdate,
-    PostResponse,
-    PostListItem,
-)
 from app.schemas.common import (
     PageMeta,
     PageResponse,
     SuccessResponse,
 )
+from app.schemas.post import (
+    PostCreate,
+    PostListItem,
+    PostResponse,
+    PostUpdate,
+)
 from app.services.post import PostService
-
 
 router = APIRouter()
 

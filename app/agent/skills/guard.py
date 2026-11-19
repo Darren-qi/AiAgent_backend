@@ -20,7 +20,7 @@ import logging
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ _URL_SCHEMES = ("http://", "https://")
 _INJECTED_KEYS = ("task_path", "session_id", "project_name")
 
 
-def _deny(code: str, message: str) -> Dict[str, str]:
+def _deny(code: str, message: str) -> dict[str, str]:
     """结构化拒绝（对齐 AutoGen _deny 形态，模型直接可读）。"""
     return {
         "denied": True,
@@ -44,7 +44,7 @@ def _deny(code: str, message: str) -> Dict[str, str]:
     }
 
 
-def _collect_paths(params: Dict[str, Any], path_arg: str) -> list:
+def _collect_paths(params: dict[str, Any], path_arg: str) -> list:
     """收集本次调用涉及的所有路径值（path_arg + 批量键 + dest）。"""
     vals = []
     if path_arg and isinstance(params.get(path_arg), str):
@@ -64,7 +64,7 @@ def _collect_paths(params: Dict[str, Any], path_arg: str) -> list:
     return vals
 
 
-def _check_paths(params: Dict[str, Any], path_arg: str) -> Optional[Dict[str, str]]:
+def _check_paths(params: dict[str, Any], path_arg: str) -> dict[str, str] | None:
     """路径约束：`..` 上跳与系统敏感绝对路径 → PATH_ESCAPE。"""
     for p in _collect_paths(params, path_arg):
         parts = Path(p).parts
@@ -82,7 +82,7 @@ def _check_paths(params: Dict[str, Any], path_arg: str) -> Optional[Dict[str, st
     return None
 
 
-def _check_url(url: str) -> Optional[Dict[str, str]]:
+def _check_url(url: str) -> dict[str, str] | None:
     """safe_url 收口：仅允许 http/https（file:// 等协议拒绝）。"""
     u = url.strip().lower()
     if not u.startswith(_URL_SCHEMES):
@@ -93,7 +93,7 @@ def _check_url(url: str) -> Optional[Dict[str, str]]:
     return None
 
 
-def _check_types(meta: Any, params: Dict[str, Any]) -> Optional[Dict[str, str]]:
+def _check_types(meta: Any, params: dict[str, Any]) -> dict[str, str] | None:
     """参数类型检查（stdlib 手写，不引 jsonschema）。
 
     保守策略（防误伤，计划 §风险表）：只拦结构性错误——
@@ -162,14 +162,14 @@ class ToolGuard:
     """执行前守卫 + 失败熔断 + 审计（进程内单例 tool_guard）。"""
 
     def __init__(self, audit_limit: int = 1000):
-        self._fail_counts: Dict[str, int] = {}
-        self._start_times: Dict[str, float] = {}
+        self._fail_counts: dict[str, int] = {}
+        self._start_times: dict[str, float] = {}
         # 审计事件环形缓冲（阶段六 JSONL run 日志消费）
         self._audit: deque = deque(maxlen=audit_limit)
 
     # ---------- 执行前检查点 ----------
 
-    def begin(self, name: str, params: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    def begin(self, name: str, params: dict[str, Any]) -> dict[str, str] | None:
         """执行前守卫。返回 None=放行；dict=结构化拒绝（不进 skill）。"""
         from app.agent.skills.core.progressive_loader import (
             classify_params_problem,
@@ -237,9 +237,9 @@ class ToolGuard:
         self,
         name: str,
         ok: bool,
-        detail: Optional[str] = None,
-        error_code: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        detail: str | None = None,
+        error_code: str | None = None,
+    ) -> dict[str, Any]:
         """执行结果回执：更新熔断计数 + 记审计事件，返回该事件。
 
         ok=True 清零连续失败；ok=False 累加。用户取消不经此路（不计失败）。
@@ -291,7 +291,7 @@ class ToolGuard:
 class _MetaShim:
     """get_guard_meta dict → _check_types 期望的属性访问形态。"""
 
-    def __init__(self, meta: Dict[str, Any]):
+    def __init__(self, meta: dict[str, Any]):
         self.name = meta.get("name", "")
         self.parameters = meta.get("parameters") or {}
 

@@ -1,6 +1,6 @@
 """重规划节点 - 渐进式重规划策略"""
 
-from typing import TYPE_CHECKING, Dict, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from app.agent.graphs.main_graph import AgentState
@@ -30,8 +30,8 @@ class Replanner:
         self,
         state: "AgentState",
         error: str,
-        retry_count: Optional[int] = None
-    ) -> List[Dict[str, Any]]:
+        retry_count: int | None = None
+    ) -> list[dict[str, Any]]:
         """
         当任务失败时，重新规划执行路径
 
@@ -76,10 +76,10 @@ class Replanner:
 
     def _retry_with_adjusted_params(
         self,
-        original_plan: List[Dict[str, Any]],
+        original_plan: list[dict[str, Any]],
         error: str,
         state: "AgentState"
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         第1次重试: 调整失败步骤的参数
 
@@ -119,10 +119,10 @@ class Replanner:
 
     def _skip_failed_steps(
         self,
-        original_plan: List[Dict[str, Any]],
+        original_plan: list[dict[str, Any]],
         error: str,
         state: "AgentState"
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         第2次重试: 跳过失败的步骤
 
@@ -161,7 +161,7 @@ class Replanner:
         self,
         state: "AgentState",
         error: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         第3次+: 兜底方案
 
@@ -200,7 +200,7 @@ class Replanner:
         self,
         task: str,
         error: str,
-        successful_results: List[Dict]
+        successful_results: list[dict]
     ) -> str:
         """生成兜底消息"""
         message_parts = []
@@ -220,7 +220,7 @@ class Replanner:
         self,
         state: "AgentState",
         error: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         通用替代计划生成
 
@@ -240,8 +240,8 @@ class Replanner:
 
     def _handle_timeout_alternative(
         self,
-        original_plan: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        original_plan: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """处理超时错误 - 增加超时时间"""
         new_plan = []
         for step in original_plan:
@@ -254,8 +254,8 @@ class Replanner:
 
     def _handle_network_alternative(
         self,
-        original_plan: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        original_plan: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """处理网络错误 - 添加重试延迟"""
         new_plan = []
         for step in original_plan:
@@ -268,9 +268,9 @@ class Replanner:
 
     def _handle_permission_alternative(
         self,
-        original_plan: List[Dict[str, Any]],
+        original_plan: list[dict[str, Any]],
         state: "AgentState"
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """处理权限错误 - 跳过相关步骤"""
         # 返回一个最小化计划
         return [
@@ -286,17 +286,17 @@ class Replanner:
 
     def _handle_generic_alternative(
         self,
-        original_plan: List[Dict[str, Any]],
+        original_plan: list[dict[str, Any]],
         state: "AgentState"
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """处理通用错误 - 保留原计划"""
         return original_plan
 
     def preserve_successful_results(
         self,
-        results: List[Dict[str, Any]],
-        new_plan: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        results: list[dict[str, Any]],
+        new_plan: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """
         保留已成功的步骤结果，避免重复执行
 

@@ -101,10 +101,11 @@ def test_chatrequest_api_key_and_pick_client():
 
 async def _seed_user_with_key(key: str) -> None:
     """独立引擎建 users+sessions 行（幂等：先清后插），免疫全局池跨 loop 污染。"""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
     from app.db.session import create_async_db_engine
     from app.models.experience import SessionModel
     from app.models.user import User
-    from sqlalchemy.ext.asyncio import async_sessionmaker
 
     eng = create_async_db_engine()
     try:

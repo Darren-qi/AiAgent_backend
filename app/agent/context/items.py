@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class ItemType(str, enum.Enum):
@@ -53,11 +53,11 @@ class ContextItem:
     access_count: int = 0                     # 访问次数
     pinned: bool = False                      # 是否固定保护
     recoverable: bool = False                 # 是否可恢复（有外部引用才能恢复）
-    external_ref: Optional[str] = None        # 外部存储引用
-    depends_on_steps: List[int] = field(default_factory=list)      # 依赖的 step
-    depends_on_items: List[str] = field(default_factory=list)      # 依赖的上下文项
+    external_ref: str | None = None        # 外部存储引用
+    depends_on_steps: list[int] = field(default_factory=list)      # 依赖的 step
+    depends_on_items: list[str] = field(default_factory=list)      # 依赖的上下文项
     persisted: bool = False                   # 是否已持久化到环境
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     state: LoadState = LoadState.INDEX_ONLY
     masked: bool = False                      # 是否已被 masking（内容换占位符）
     mask_reason: str = ""
@@ -90,7 +90,7 @@ class ContextItem:
         self.last_access_step = step
         self.access_count += 1
 
-    def index_entry(self) -> Dict[str, Any]:
+    def index_entry(self) -> dict[str, Any]:
         """轻量索引形态：不含正文。"""
         return {
             "id": self.id,

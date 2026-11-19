@@ -2,9 +2,9 @@
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 from app.agent.llm.factory import LLMFactory
 from app.agent.memory.manager import MemoryManager
@@ -27,8 +27,8 @@ class AgentResult:
     """Agent 执行结果"""
     success: bool
     data: Any = None
-    error: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     iterations: int = 0
     cost: float = 0.0
 
@@ -41,7 +41,7 @@ class AgentMessage:
     from_agent: str = ""
     to_agent: str = ""
     timestamp: float = 0.0
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class BaseAgent(ABC):
@@ -50,17 +50,17 @@ class BaseAgent(ABC):
     def __init__(
         self,
         agent_type: AgentType,
-        name: Optional[str] = None,
-        system_prompt: Optional[str] = None,
-        llm_factory: Optional[LLMFactory] = None,
-        memory_manager: Optional[MemoryManager] = None,
+        name: str | None = None,
+        system_prompt: str | None = None,
+        llm_factory: LLMFactory | None = None,
+        memory_manager: MemoryManager | None = None,
     ):
         self.agent_type = agent_type
         self.name = name or self.__class__.__name__
         self.system_prompt = system_prompt or self._get_default_system_prompt()
         self._llm_factory = llm_factory
         self._memory_manager = memory_manager
-        self._message_history: List[AgentMessage] = []
+        self._message_history: list[AgentMessage] = []
         self._iteration_count = 0
 
     @property
@@ -71,7 +71,7 @@ class BaseAgent(ABC):
         return self._llm_factory
 
     @property
-    def memory_manager(self) -> Optional[MemoryManager]:
+    def memory_manager(self) -> MemoryManager | None:
         return self._memory_manager
 
     @abstractmethod
@@ -80,7 +80,7 @@ class BaseAgent(ABC):
         pass
 
     @abstractmethod
-    async def run(self, input_data: Any, context: Optional[Dict[str, Any]] = None) -> AgentResult:
+    async def run(self, input_data: Any, context: dict[str, Any] | None = None) -> AgentResult:
         """
         执行 Agent 任务
 
@@ -97,7 +97,7 @@ class BaseAgent(ABC):
         self,
         prompt: str,
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         strategy: str = "balance",
         **kwargs
     ) -> str:
@@ -133,7 +133,7 @@ class BaseAgent(ABC):
         self,
         to_agent: str,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: dict[str, Any] | None = None
     ) -> AgentMessage:
         """
         发送消息给其他 Agent
@@ -167,7 +167,7 @@ class BaseAgent(ABC):
         self._message_history.append(message)
         logger.debug(f"[{self.name}] 收到来自 [{message.from_agent}] 的消息: {message.content[:100]}...")
 
-    def get_message_history(self) -> List[AgentMessage]:
+    def get_message_history(self) -> list[AgentMessage]:
         """获取消息历史"""
         return self._message_history.copy()
 
@@ -176,7 +176,7 @@ class BaseAgent(ABC):
         self._message_history.clear()
         self._iteration_count = 0
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取 Agent 统计信息"""
         return {
             "name": self.name,

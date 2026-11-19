@@ -2,7 +2,8 @@
 
 import os
 import time
-from typing import AsyncIterator, Dict, Any
+from collections.abc import AsyncIterator
+from typing import Any
 
 from openai import AsyncOpenAI
 
@@ -34,7 +35,7 @@ class MiniMaxProvider(BaseLLMProvider):
 
         messages = [{"role": m.role, "content": m.content} for m in request.messages]
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self.config.name,
             "messages": messages,
             "temperature": request.temperature,
@@ -65,7 +66,7 @@ class MiniMaxProvider(BaseLLMProvider):
         """流式聊天请求"""
         messages = [{"role": m.role, "content": m.content} for m in request.messages]
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self.config.name,
             "messages": messages,
             "temperature": request.temperature,

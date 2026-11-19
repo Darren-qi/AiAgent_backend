@@ -2,8 +2,9 @@
 经验重排序模块
 """
 
-from typing import List, Dict, Any
 from datetime import datetime
+from typing import Any
+
 from app.agent.experience.base import Experience
 
 
@@ -19,10 +20,10 @@ class ExperienceReranker:
 
     async def rerank(
         self,
-        experiences: List[Experience],
+        experiences: list[Experience],
         query: str,
-        context: Dict[str, Any]
-    ) -> List[Experience]:
+        context: dict[str, Any]
+    ) -> list[Experience]:
         """
         重排序经验列表
 
@@ -47,7 +48,7 @@ class ExperienceReranker:
         self,
         exp: Experience,
         query: str,
-        context: Dict[str, Any]
+        context: dict[str, Any]
     ) -> float:
         """计算综合分数"""
         base_score = 0.5
@@ -78,8 +79,8 @@ class ExperienceReranker:
 
     def filter_by_threshold(
         self,
-        experiences: List[Experience],
+        experiences: list[Experience],
         threshold: float = 0.3
-    ) -> List[Experience]:
+    ) -> list[Experience]:
         """过滤低分经验"""
         return [exp for exp in experiences if exp.success_count >= threshold]

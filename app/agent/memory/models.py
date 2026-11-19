@@ -12,7 +12,7 @@
     - working_memory: 当前任务工作记忆
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from sqlalchemy import Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -59,7 +59,7 @@ class ConversationMessage(Base, IDMixin, TimestampMixin):
         nullable=False,
         comment="消息内容",
     )
-    message_metadata: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+    message_metadata: Mapped[dict[str, Any] | None] = mapped_column(
         "metadata",
         JSONB,
         nullable=True,
@@ -112,7 +112,7 @@ class SemanticFact(Base, IDMixin, TimestampMixin):
         nullable=False,
         comment="事实键",
     )
-    fact_value: Mapped[Dict[str, Any]] = mapped_column(
+    fact_value: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
         comment="事实值",
@@ -162,12 +162,12 @@ class EpisodicEvent(Base, IDMixin, TimestampMixin):
         unique=True,
         comment="事件唯一标识",
     )
-    event_data: Mapped[Dict[str, Any]] = mapped_column(
+    event_data: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
         comment="事件数据",
     )
-    summary: Mapped[Optional[str]] = mapped_column(
+    summary: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="事件摘要",
@@ -219,7 +219,7 @@ class WorkingMemory(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
         nullable=False,
         comment="记忆键",
     )
-    memory_value: Mapped[Dict[str, Any]] = mapped_column(
+    memory_value: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
         comment="记忆值",

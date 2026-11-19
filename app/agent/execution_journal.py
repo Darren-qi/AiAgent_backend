@@ -31,9 +31,10 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 from sqlalchemy import delete, select, update
 
@@ -64,8 +65,8 @@ class JournalDecision:
     """open_journal 的裁决结果。"""
 
     action: str = EXECUTE
-    op_key: Optional[str] = None
-    result: Optional[Dict[str, Any]] = None   # REPLAY 时返回给调用方的结果快照
+    op_key: str | None = None
+    result: dict[str, Any] | None = None   # REPLAY 时返回给调用方的结果快照
     reason: str = ""
 
     @property
@@ -85,8 +86,8 @@ _REPLAY_MSG = "该调用在上次崩溃前已成功执行过，已跳过重复�
 def resolve_semantics(
     risk: str,
     retry: int,
-    op_semantics: Optional[Dict[str, str]],
-    params: Dict[str, Any],
+    op_semantics: dict[str, str] | None,
+    params: dict[str, Any],
 ) -> str:
     """按优先级解析一次调用的幂等语义。
 
@@ -112,7 +113,7 @@ def resolve_semantics(
     return ONCE
 
 
-def _normalize_params(params: Dict[str, Any]) -> str:
+def _normalize_params(params: dict[str, Any]) -> str:
     try:
         return json.dumps(params, sort_keys=True, ensure_ascii=False, default=str)
     except Exception:  # noqa: BLE001 - 序列化失败退化为 repr，不能挡住执行
@@ -141,7 +142,7 @@ def _redact_params(params: Any, _depth: int = 0) -> Any:
     if _depth > _MAX_DEPTH:
         return "..."
     if isinstance(params, dict):
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for k, v in list(params.items())[:200]:
             key = str(k)
             out[key] = (
@@ -159,9 +160,9 @@ def _redact_params(params: Any, _depth: int = 0) -> Any:
 
 def make_op_key(
     session_id: str,
-    task_id: Optional[str],
+    task_id: str | None,
     action: str,
-    params: Dict[str, Any],
+    params: dict[str, Any],
 ) -> str:
     """意图键：同一会话+任务+技能+参数 → 同一个 key（唯一索引保证只有一行）。"""
     parts = [
@@ -190,11 +191,11 @@ async def _load_row(op_key: str):
 async def _insert_running(
     op_key: str,
     session_id: str,
-    task_id: Optional[str],
-    todo_id: Optional[str],
+    task_id: str | None,
+    todo_id: str | None,
     action: str,
     semantics: str,
-    params: Dict[str, Any],
+    params: dict[str, Any],
 ) -> None:
     from app.db.session import AsyncSessionLocal
     from app.models.action_journal import ActionJournal
@@ -229,8 +230,8 @@ async def _reset_running(op_key: str) -> None:
 async def _update_status(
     op_key: str,
     status: str,
-    result: Optional[Dict[str, Any]] = None,
-    error: Optional[str] = None,
+    result: dict[str, Any] | None = None,
+    error: str | None = None,
 ) -> None:
     from app.db.session import AsyncSessionLocal
     from app.models.action_journal import ActionJournal
@@ -284,7 +285,7 @@ async def _purge_stale() -> None:
         logger.warning("[Journal] 过期清理失败（不影响执行）: %s", e)
 
 
-async def _maybe_verify(verify: Optional[Callable[[], Any]]) -> Optional[bool]:
+async def _maybe_verify(verify: Callable[[], Any] | None) -> bool | None:
     """跑技能提供的世界状态核验器，返回 True/False/None（无法判定）。"""
     if verify is None:
         return None
@@ -305,12 +306,12 @@ async def _maybe_verify(verify: Optional[Callable[[], Any]]) -> Optional[bool]:
 async def open_journal(
     *,
     action: str,
-    params: Dict[str, Any],
+    params: dict[str, Any],
     session_id: str,
-    task_id: Optional[str] = None,
-    todo_id: Optional[str] = None,
+    task_id: str | None = None,
+    todo_id: str | None = None,
     semantics: str = ONCE,
-    verify: Optional[Callable[[], Any]] = None,
+    verify: Callable[[], Any] | None = None,
 ) -> JournalDecision:
     """执行前裁决：放行 / 复用上次结果 / 返回无法确认。
 
@@ -425,7 +426,7 @@ def _ambiguous(op_key: str, action: str, status: str) -> JournalDecision:
     )
 
 
-def _replay_payload(row: Any, action: str) -> Dict[str, Any]:
+def _replay_payload(row: Any, action: str) -> dict[str, Any]:
     """把已记录的结果还原成一次执行返回。"""
     stored = row.result if isinstance(row.result, dict) else {}
     if stored.get("success") is True:
@@ -466,7 +467,7 @@ def _json_safe(value: Any) -> Any:
         return str(value)
 
 
-def snapshot_result(result: Any) -> Optional[Dict[str, Any]]:
+def snapshot_result(result: Any) -> dict[str, Any] | None:
     """把 SkillResult 压成可落 JSON 的结果快照（重放时原样还原）。"""
     if result is None:
         return None
@@ -489,10 +490,10 @@ def _is_fresh(row: Any) -> bool:
 
 
 async def close_journal(
-    op_key: Optional[str],
+    op_key: str | None,
     success: bool,
-    result: Optional[Dict[str, Any]] = None,
-    error: Optional[str] = None,
+    result: dict[str, Any] | None = None,
+    error: str | None = None,
 ) -> None:
     """执行结束回写（只有正常返回才调用；CancelledError 保持 running 作为崩溃证据）。"""
     if not op_key:
@@ -504,7 +505,7 @@ async def close_journal(
         logger.warning("[Journal] close_journal(%s) 失败（不影响执行）: %s", op_key, e)
 
 
-async def mark_ambiguous(op_key: Optional[str]) -> None:
+async def mark_ambiguous(op_key: str | None) -> None:
     """把残留行标成 ambiguous（已裁决为无法确认）。"""
     if not op_key:
         return

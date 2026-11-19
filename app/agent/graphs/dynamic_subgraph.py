@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +29,11 @@ class DynamicSubgraph:
 
     async def execute(
         self,
-        steps: List[Dict[str, Any]],
+        steps: list[dict[str, Any]],
         mode: str = "sequential",
-        context: Optional[Dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
         enable_timeout: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         执行子图
 
@@ -56,10 +56,10 @@ class DynamicSubgraph:
 
     async def _execute_sequential(
         self,
-        steps: List[Dict[str, Any]],
-        context: Optional[Dict[str, Any]],
+        steps: list[dict[str, Any]],
+        context: dict[str, Any] | None,
         enable_timeout: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """串行执行，支持超时控制"""
         results = []
 
@@ -81,10 +81,10 @@ class DynamicSubgraph:
 
     async def _execute_with_dependencies(
         self,
-        steps: List[Dict[str, Any]],
-        context: Optional[Dict[str, Any]],
+        steps: list[dict[str, Any]],
+        context: dict[str, Any] | None,
         enable_timeout: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         执行计划，支持步骤依赖
 
@@ -152,8 +152,8 @@ class DynamicSubgraph:
 
     def _build_execution_layers(
         self,
-        steps: List[Dict[str, Any]],
-    ) -> List[List[Dict[str, Any]]]:
+        steps: list[dict[str, Any]],
+    ) -> list[list[dict[str, Any]]]:
         """
         构建执行层次
 
@@ -217,10 +217,10 @@ class DynamicSubgraph:
 
     async def _execute_single_step_with_timeout(
         self,
-        step: Dict[str, Any],
-        context: Optional[Dict[str, Any]],
+        step: dict[str, Any],
+        context: dict[str, Any] | None,
         timeout: float,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """带超时的步骤执行"""
         try:
             return await asyncio.wait_for(
@@ -238,9 +238,9 @@ class DynamicSubgraph:
 
     async def _execute_single_step(
         self,
-        step: Dict[str, Any],
-        context: Optional[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+        step: dict[str, Any],
+        context: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         """执行单个步骤"""
         action = step.get("action", "unknown")
         params = step.get("params", {}).copy()
@@ -285,7 +285,7 @@ class DynamicSubgraph:
                 "step": step.get("step"),
             }
 
-    def _get_timeout_for_step(self, step: Dict[str, Any]) -> float:
+    def _get_timeout_for_step(self, step: dict[str, Any]) -> float:
         """根据步骤类型获取超时时间"""
         action = step.get("action", "").lower()
 
@@ -310,9 +310,9 @@ class DynamicSubgraph:
 
     def configure_timeouts(
         self,
-        default: Optional[int] = None,
-        max_timeout: Optional[int] = None,
-        http_timeout: Optional[int] = None,
+        default: int | None = None,
+        max_timeout: int | None = None,
+        http_timeout: int | None = None,
     ) -> None:
         """配置超时参数"""
         if default is not None:

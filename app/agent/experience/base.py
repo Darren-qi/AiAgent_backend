@@ -3,9 +3,9 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 
 @dataclass
@@ -16,11 +16,11 @@ class Experience:
     task_type: str
     description: str
     solution: str
-    steps: List[Dict[str, Any]]
+    steps: list[dict[str, Any]]
     success: bool
     created_at: datetime
     success_count: int = 1
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: dict[str, Any] | None = None
 
 
 class BaseExperienceStore(ABC):
@@ -32,7 +32,7 @@ class BaseExperienceStore(ABC):
         pass
 
     @abstractmethod
-    async def get(self, exp_id: str) -> Optional[Experience]:
+    async def get(self, exp_id: str) -> Experience | None:
         """获取经验"""
         pass
 
@@ -40,9 +40,9 @@ class BaseExperienceStore(ABC):
     async def search(
         self,
         query: str,
-        task_type: Optional[str] = None,
+        task_type: str | None = None,
         top_k: int = 5
-    ) -> List[Experience]:
+    ) -> list[Experience]:
         """搜索经验"""
         pass
 

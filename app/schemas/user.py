@@ -7,12 +7,10 @@
 """
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.models.user import UserRole, UserStatus
-
 
 # =============================================
 # 用户基础 Schema
@@ -20,10 +18,10 @@ from app.models.user import UserRole, UserStatus
 
 class UserBase(BaseModel):
     """用户基础 Schema"""
-    username: Optional[str] = Field(default=None, max_length=50, description="用户名")
-    email: Optional[EmailStr] = Field(default=None, description="邮箱")
-    nickname: Optional[str] = Field(default=None, max_length=100, description="昵称")
-    bio: Optional[str] = Field(default=None, max_length=500, description="个人简介")
+    username: str | None = Field(default=None, max_length=50, description="用户名")
+    email: EmailStr | None = Field(default=None, description="邮箱")
+    nickname: str | None = Field(default=None, max_length=100, description="昵称")
+    bio: str | None = Field(default=None, max_length=500, description="个人简介")
 
 
 class UserCreate(UserBase):
@@ -36,7 +34,7 @@ class UserCreate(UserBase):
     username: str = Field(min_length=3, max_length=50, description="用户名")
     email: EmailStr = Field(description="邮箱")
     password: str = Field(min_length=8, max_length=128, description="密码")
-    nickname: Optional[str] = Field(default=None, max_length=100, description="昵称")
+    nickname: str | None = Field(default=None, max_length=100, description="昵称")
 
     @field_validator("username")
     @classmethod
@@ -62,9 +60,9 @@ class UserUpdate(BaseModel):
     用于更新用户信息（部分更新）。
     """
 
-    nickname: Optional[str] = Field(default=None, max_length=100, description="昵称")
-    avatar: Optional[str] = Field(default=None, max_length=500, description="头像URL")
-    bio: Optional[str] = Field(default=None, max_length=500, description="个人简介")
+    nickname: str | None = Field(default=None, max_length=100, description="昵称")
+    avatar: str | None = Field(default=None, max_length=500, description="头像URL")
+    bio: str | None = Field(default=None, max_length=500, description="个人简介")
 
 
 class UserPasswordUpdate(BaseModel):
@@ -89,8 +87,8 @@ class UserLLMKeyUpdate(BaseModel):
 class LLMKeyStatus(BaseModel):
     """DeepSeek API Key 状态 Schema（只回掩码，不回全文）"""
     configured: bool = Field(description="是否已配置")
-    masked: Optional[str] = Field(default=None, description="掩码显示，如 sk-***abcd")
-    error: Optional[str] = Field(default=None, description="保存失败原因（如 Key 无效），成功为 None")
+    masked: str | None = Field(default=None, description="掩码显示，如 sk-***abcd")
+    error: str | None = Field(default=None, description="保存失败原因（如 Key 无效），成功为 None")
 
 
 # =============================================
@@ -109,14 +107,14 @@ class UserResponse(BaseModel):
     id: int = Field(description="用户ID")
     username: str = Field(description="用户名")
     email: str = Field(description="邮箱")
-    nickname: Optional[str] = Field(default=None, description="昵称")
-    avatar: Optional[str] = Field(default=None, description="头像URL")
-    bio: Optional[str] = Field(default=None, description="个人简介")
+    nickname: str | None = Field(default=None, description="昵称")
+    avatar: str | None = Field(default=None, description="头像URL")
+    bio: str | None = Field(default=None, description="个人简介")
     role: UserRole = Field(description="用户角色")
     status: UserStatus = Field(description="用户状态")
     is_active: bool = Field(description="是否激活")
     created_at: datetime = Field(description="注册时间")
-    last_login_at: Optional[datetime] = Field(default=None, description="最后登录时间")
+    last_login_at: datetime | None = Field(default=None, description="最后登录时间")
 
 
 class UserListResponse(BaseModel):
@@ -125,8 +123,8 @@ class UserListResponse(BaseModel):
 
     id: int = Field(description="用户ID")
     username: str = Field(description="用户名")
-    nickname: Optional[str] = Field(default=None, description="昵称")
-    avatar: Optional[str] = Field(default=None, description="头像URL")
+    nickname: str | None = Field(default=None, description="昵称")
+    avatar: str | None = Field(default=None, description="头像URL")
     role: UserRole = Field(description="用户角色")
     status: UserStatus = Field(description="用户状态")
     created_at: datetime = Field(description="注册时间")
@@ -143,9 +141,9 @@ class UserPublicProfile(BaseModel):
 
     id: int = Field(description="用户ID")
     username: str = Field(description="用户名")
-    nickname: Optional[str] = Field(default=None, description="昵称")
-    avatar: Optional[str] = Field(default=None, description="头像URL")
-    bio: Optional[str] = Field(default=None, description="个人简介")
+    nickname: str | None = Field(default=None, description="昵称")
+    avatar: str | None = Field(default=None, description="头像URL")
+    bio: str | None = Field(default=None, description="个人简介")
     created_at: datetime = Field(description="注册时间")
 
 
@@ -160,9 +158,9 @@ class UserAdminUpdate(BaseModel):
     管理员可以修改用户的角色和状态。
     """
 
-    role: Optional[UserRole] = Field(default=None, description="用户角色")
-    status: Optional[UserStatus] = Field(default=None, description="用户状态")
-    nickname: Optional[str] = Field(default=None, max_length=100, description="昵称")
+    role: UserRole | None = Field(default=None, description="用户角色")
+    status: UserStatus | None = Field(default=None, description="用户状态")
+    nickname: str | None = Field(default=None, max_length=100, description="昵称")
 
 
 class UserStats(BaseModel):
@@ -178,7 +176,7 @@ class UserStats(BaseModel):
 
 class UserQueryParams(BaseModel):
     """用户查询参数 Schema"""
-    keyword: Optional[str] = Field(default=None, description="搜索关键词（用户名/邮箱/昵称）")
-    role: Optional[UserRole] = Field(default=None, description="按角色筛选")
-    status: Optional[UserStatus] = Field(default=None, description="按状态筛选")
-    is_active: Optional[bool] = Field(default=None, description="按激活状态筛选")
+    keyword: str | None = Field(default=None, description="搜索关键词（用户名/邮箱/昵称）")
+    role: UserRole | None = Field(default=None, description="按角色筛选")
+    status: UserStatus | None = Field(default=None, description="按状态筛选")
+    is_active: bool | None = Field(default=None, description="按激活状态筛选")

@@ -4,14 +4,14 @@ from __future__ import annotations
 import itertools
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Protocol
+from typing import Protocol
 
 
 class ExternalStore(Protocol):
     """外部存储协议——后续可接 pgsaver / 文件 / 向量库。"""
 
-    def put(self, content: str, meta: Optional[dict] = None) -> str: ...
-    def get(self, ref: str) -> Optional[str]: ...
+    def put(self, content: str, meta: dict | None = None) -> str: ...
+    def get(self, ref: str) -> str | None: ...
     def exists(self, ref: str) -> bool: ...
 
 
@@ -19,18 +19,18 @@ class ExternalStore(Protocol):
 class MemoryStore:
     """内存存储兜底（规范 §五B：无外部存储实现时使用）。"""
 
-    _data: Dict[str, str] = field(default_factory=dict)
-    _meta: Dict[str, dict] = field(default_factory=dict)
+    _data: dict[str, str] = field(default_factory=dict)
+    _meta: dict[str, dict] = field(default_factory=dict)
     _seq: itertools.count = field(default_factory=lambda: itertools.count(1))
 
-    def put(self, content: str, meta: Optional[dict] = None) -> str:
+    def put(self, content: str, meta: dict | None = None) -> str:
         ref = f"mem://{int(time.time() * 1000)}/{next(self._seq)}"
         self._data[ref] = content
         if meta:
             self._meta[ref] = meta
         return ref
 
-    def get(self, ref: str) -> Optional[str]:
+    def get(self, ref: str) -> str | None:
         return self._data.get(ref)
 
     def exists(self, ref: str) -> bool:
@@ -52,7 +52,7 @@ class PgSaverStore:
         self._default_sid = session_id
         self._seq = itertools.count(1)
 
-    def put(self, content: str, meta: Optional[dict] = None) -> str:
+    def put(self, content: str, meta: dict | None = None) -> str:
         import json
         sid = (meta or {}).get("session_id", self._default_sid)
         ref = f"pgsaver://{sid}/{next(self._seq)}"
@@ -64,7 +64,7 @@ class PgSaverStore:
         )
         return ref
 
-    def get(self, ref: str) -> Optional[str]:
+    def get(self, ref: str) -> str | None:
         import json
         parts = ref.split("/")
         sid = parts[-2] if len(parts) >= 2 else self._default_sid
@@ -80,7 +80,7 @@ class PgSaverStore:
         return self.get(ref) is not None
 
 
-_STORES: Dict[str, ExternalStore] = {}
+_STORES: dict[str, ExternalStore] = {}
 
 
 def get_store(kind: str = "memory") -> ExternalStore:

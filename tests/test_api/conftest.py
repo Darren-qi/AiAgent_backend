@@ -6,8 +6,9 @@
 按模块隔离（见 pytest_collection_modifyitems）。
 """
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 _SKIP_MODULES = {
     "test_auth.py": "缺 client fixture；启用需隔离测试库，防写真实数据库",

@@ -3,11 +3,11 @@
 from fastapi import APIRouter, status
 from pydantic import BaseModel
 
-from app.api.deps import DBSession, CurrentUser
+from app.api.deps import CurrentUser, DBSession
 from app.core.exceptions import UnauthorizedException
-from app.schemas.user import UserCreate, UserResponse
-from app.schemas.token import Token, TokenRefreshRequest
 from app.schemas.common import SuccessResponse
+from app.schemas.token import Token, TokenRefreshRequest
+from app.schemas.user import UserCreate, UserResponse
 from app.services.auth import AuthService
 from app.services.user import UserService
 

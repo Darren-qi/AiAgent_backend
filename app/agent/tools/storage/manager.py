@@ -1,9 +1,9 @@
 """存储管理器 - 统一管理多种对象存储"""
 
 import os
-from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 
 class StorageProvider(str, Enum):
@@ -19,10 +19,10 @@ class StorageProvider(str, Enum):
 class StorageResult:
     """存储结果"""
     success: bool
-    url: Optional[str] = None
-    key: Optional[str] = None
-    error: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    url: str | None = None
+    key: str | None = None
+    error: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class StorageManager:
@@ -34,11 +34,11 @@ class StorageManager:
 
     def _create_provider(self) -> Any:
         """创建存储提供商实例"""
-        from app.agent.tools.storage.providers.tencent import TencentCOSProvider
         from app.agent.tools.storage.providers.aliyun import AliyunOSSProvider
         from app.agent.tools.storage.providers.baidu import BaiduBOSProvider
-        from app.agent.tools.storage.providers.minio import MinIOProvider
         from app.agent.tools.storage.providers.local import LocalStorageProvider
+        from app.agent.tools.storage.providers.minio import MinIOProvider
+        from app.agent.tools.storage.providers.tencent import TencentCOSProvider
 
         providers = {
             StorageProvider.TENCENT: TencentCOSProvider,
@@ -55,13 +55,13 @@ class StorageManager:
         self,
         file_data: bytes,
         filename: str,
-        content_type: Optional[str] = None,
+        content_type: str | None = None,
         folder: str = ""
     ) -> StorageResult:
         """上传文件"""
         return await self._provider.upload(file_data, filename, content_type, folder)
 
-    async def download_file(self, key: str) -> Optional[bytes]:
+    async def download_file(self, key: str) -> bytes | None:
         """下载文件"""
         return await self._provider.download(key)
 
@@ -69,7 +69,7 @@ class StorageManager:
         """删除文件"""
         return await self._provider.delete(key)
 
-    async def get_file_url(self, key: str, expires: int = 3600) -> Optional[str]:
+    async def get_file_url(self, key: str, expires: int = 3600) -> str | None:
         """获取文件访问 URL"""
         return await self._provider.get_url(key, expires)
 
@@ -77,10 +77,10 @@ class StorageManager:
         """列出文件"""
         return await self._provider.list(prefix, max_keys)
 
-    async def write_file(self, content: str, filename: str, folder: str) -> Dict[str, Any]:
+    async def write_file(self, content: str, filename: str, folder: str) -> dict[str, Any]:
         """直接写入文本文件"""
         return await self._provider.write_file(content, filename, folder)
 
-    async def build_file_tree(self, folder_name: str) -> List[Dict[str, Any]]:
+    async def build_file_tree(self, folder_name: str) -> list[dict[str, Any]]:
         """构建文件树"""
         return await self._provider.build_file_tree(folder_name)

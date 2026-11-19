@@ -16,8 +16,8 @@ import json
 import logging
 import re
 import shutil
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Set
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +35,8 @@ def tasks_base_dir() -> Path:
     return LocalStorageProvider().base_path
 
 
-def _dir_names_from_context_values(values: Iterable) -> Set[str]:
-    names: Set[str] = set()
+def _dir_names_from_context_values(values: Iterable) -> set[str]:
+    names: set[str] = set()
     for v in values:
         if v is None:
             continue
@@ -50,13 +50,13 @@ def _dir_names_from_context_values(values: Iterable) -> Set[str]:
     return names
 
 
-def _dir_names_from_absolute_paths(paths: Iterable[Optional[str]]) -> Set[str]:
+def _dir_names_from_absolute_paths(paths: Iterable[str | None]) -> set[str]:
     """从 /a/b/tasks/<项目目录>/<文件> 里取 <项目目录>。
 
     结构规则：tasks/ 后必须还有「目录/文件」两段才算有项目目录——
     `/no/tasks/here.py` 这种直接躺在 tasks 根下的文件没有项目目录，跳过。
     """
-    names: Set[str] = set()
+    names: set[str] = set()
     for ap in paths:
         if not ap or "/tasks/" not in ap:
             continue
@@ -66,7 +66,7 @@ def _dir_names_from_absolute_paths(paths: Iterable[Optional[str]]) -> Set[str]:
     return {n for n in names if n and n not in (".", "..") and "/" not in n}
 
 
-def _candidates(dir_names: Set[str], recorded_paths: Sequence[Optional[str]]) -> List[Path]:
+def _candidates(dir_names: set[str], recorded_paths: Sequence[str | None]) -> list[Path]:
     """每个目录名 → 候选绝对路径。
 
     默认用当前 tasks 根；老数据的 absolute_path 可能指向另一个 tasks 目录
@@ -79,7 +79,7 @@ def _candidates(dir_names: Set[str], recorded_paths: Sequence[Optional[str]]) ->
             prefix = ap.split("/tasks/", 1)[0]
             if prefix:
                 bases.add(Path(prefix) / "tasks")
-    out: List[Path] = []
+    out: list[Path] = []
     for b in bases:
         for name in dir_names:
             out.append(b / name)
@@ -105,13 +105,13 @@ def safe_task_dir(path: Path) -> bool:
 
 
 def remove_task_dirs(dir_names: Iterable[str],
-                     recorded_paths: Sequence[Optional[str]] = ()) -> List[str]:
+                     recorded_paths: Sequence[str | None] = ()) -> list[str]:
     """删除磁盘任务目录，返回真正删掉的路径字符串（失败只记日志）。"""
     names = {n for n in dir_names if n}
     if not names:
         return []
-    removed: List[str] = []
-    seen: Set[str] = set()
+    removed: list[str] = []
+    seen: set[str] = set()
     for cand in _candidates(names, recorded_paths):
         key = str(cand)
         if key in seen:
@@ -130,14 +130,14 @@ def remove_task_dirs(dir_names: Iterable[str],
     return removed
 
 
-async def collect_session_task_dirs(db, session_id: str) -> tuple[Set[str], List[Optional[str]]]:
+async def collect_session_task_dirs(db, session_id: str) -> tuple[set[str], list[str | None]]:
     """收集会话对应的磁盘目录名与原始 absolute_path（删除子表前调用）。"""
     from sqlalchemy import select
 
     from app.models.experience import SessionContext, SessionFile
 
-    dir_names: Set[str] = set()
-    recorded: List[Optional[str]] = []
+    dir_names: set[str] = set()
+    recorded: list[str | None] = []
     try:
         rows = (await db.execute(
             select(SessionContext.context_value).where(
@@ -183,7 +183,7 @@ async def delete_session_child_rows(db, session_id: str) -> dict:
     return result
 
 
-async def _dirs_used_by_other_sessions(db, session_id: str, names: Set[str]) -> Set[str]:
+async def _dirs_used_by_other_sessions(db, session_id: str, names: set[str]) -> set[str]:
     """候选目录里有没有被**别的会话**引用的（task_path 是按会话建的，正常不会撞）。
 
     撞上就跳过：删会话不能把别人还在用的目录删了。

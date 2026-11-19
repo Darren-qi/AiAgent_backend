@@ -1,16 +1,16 @@
 """通知管理器"""
 
 import os
-from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
 class NotificationResult:
     """通知结果"""
     success: bool
-    message_id: Optional[str] = None
-    error: Optional[str] = None
+    message_id: str | None = None
+    error: str | None = None
 
 
 class NotificationManager:
@@ -22,11 +22,11 @@ class NotificationManager:
 
     async def send_email(
         self,
-        to: List[str],
+        to: list[str],
         subject: str,
         content: str,
         html: bool = False,
-        attachments: Optional[List[Dict[str, bytes]]] = None
+        attachments: list[dict[str, bytes]] | None = None
     ) -> NotificationResult:
         """发送邮件通知"""
         if not self.email_enabled:
@@ -63,11 +63,11 @@ class NotificationManager:
 
     async def send_broadcast(
         self,
-        channels: List[str],
-        recipients: Dict[str, List[str]],
+        channels: list[str],
+        recipients: dict[str, list[str]],
         subject: str,
         content: str
-    ) -> Dict[str, NotificationResult]:
+    ) -> dict[str, NotificationResult]:
         """广播通知到多个渠道"""
         results = {}
 
@@ -98,8 +98,8 @@ class NotificationManager:
         task_name: str,
         status: str,
         result: str,
-        notify_channels: List[str]
-    ) -> Dict[str, NotificationResult]:
+        notify_channels: list[str]
+    ) -> dict[str, NotificationResult]:
         """发送定时任务通知"""
         subject = f"[{status}] 定时任务 - {task_name}"
         content = f"任务状态: {status}\n\n结果:\n{result}"
@@ -120,7 +120,7 @@ class NotificationManager:
         title: str = "RiffCode 通知",
         content: str = "",
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         统一的发送接口（供 NotificationSkill 调用）
 

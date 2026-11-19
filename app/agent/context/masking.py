@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 from .config import ContextConfig
 from .items import ContextItem, ItemType, LoadState
@@ -26,7 +25,7 @@ class Decision:
     item_id: str
     action: str            # masking / offload / evict / compress
     reason: str
-    score: Optional[dict] = None
+    score: dict | None = None
 
     def __str__(self) -> str:
         s = f" score={self.score}" if self.score else ""
@@ -35,11 +34,11 @@ class Decision:
 
 @dataclass
 class MaskResult:
-    decisions: List[Decision] = field(default_factory=list)
+    decisions: list[Decision] = field(default_factory=list)
     tokens_freed: int = 0
 
     @property
-    def masked_ids(self) -> List[str]:
+    def masked_ids(self) -> list[str]:
         return [d.item_id for d in self.decisions if d.action == ACT_MASK]
 
 
@@ -65,7 +64,7 @@ class StepLevelUnloader:
         self.store = store   # 外部存储：masking/淘汰前保存原文，保证可恢复
 
     def _protected(self, item: ContextItem, current_step: int,
-                   pending_obs: set, unfinished_actions: set) -> Optional[str]:
+                   pending_obs: set, unfinished_actions: set) -> str | None:
         """返回保护原因；None=可处理。"""
         if item.is_protected:
             return "固定保护（系统提示/约束/原始请求/当前任务或 pinned）"
@@ -84,10 +83,10 @@ class StepLevelUnloader:
             return "已是索引态，无可卸载内容"
         return None
 
-    def run(self, items: Dict[str, ContextItem], current_step: int,
+    def run(self, items: dict[str, ContextItem], current_step: int,
             used_tokens: int, target_tokens: int,
-            pending_obs: Optional[set] = None,
-            unfinished_actions: Optional[set] = None,
+            pending_obs: set | None = None,
+            unfinished_actions: set | None = None,
             query: str = "", topic_switched: bool = False) -> MaskResult:
         """预算超限时先 masking。仅当 masking 释放不足，才评分淘汰。
 
@@ -101,7 +100,7 @@ class StepLevelUnloader:
             return result
 
         # 候选：已加载、非保护、按结构化优先排序
-        candidates: List[ContextItem] = []
+        candidates: list[ContextItem] = []
         for it in items.values():
             if it.state != LoadState.LOADED or it.masked:
                 continue

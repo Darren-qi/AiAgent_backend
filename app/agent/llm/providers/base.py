@@ -1,7 +1,7 @@
 """LLM 基类"""
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Dict
+from collections.abc import AsyncIterator
 
 from app.agent.llm.types import ChatRequest, LLMResponse, ModelConfig
 
@@ -27,7 +27,7 @@ class BaseLLMProvider(ABC):
         """验证连接是否正常"""
         pass
 
-    def calculate_cost(self, usage: Dict[str, int]) -> float:
+    def calculate_cost(self, usage: dict[str, int]) -> float:
         """计算请求成本"""
         input_tokens = usage.get("prompt_tokens", 0)
         output_tokens = usage.get("completion_tokens", 0)

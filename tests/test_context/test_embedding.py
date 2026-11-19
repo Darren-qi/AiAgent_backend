@@ -15,9 +15,18 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from app.agent.context import (  # noqa: E402
-    ContextConfig, ContextItem, ContextManager, EmbeddingError,
-    ItemType, LoadState, RecallConfig, ZhipuEmbedder, calibrate,
-    calibration_ratio, count_tokens, reset_calibration,
+    ContextConfig,
+    ContextItem,
+    ContextManager,
+    EmbeddingError,
+    ItemType,
+    LoadState,
+    RecallConfig,
+    ZhipuEmbedder,
+    calibrate,
+    calibration_ratio,
+    count_tokens,
+    reset_calibration,
 )
 
 DIM = 2048

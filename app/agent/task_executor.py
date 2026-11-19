@@ -7,7 +7,7 @@ Task Manager - 任务状态管理模块
 
 import logging
 from enum import Enum
-from typing import Dict, Any
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class TaskManager:
     def __init__(self):
         if self._initialized:
             return
-        self._tasks: Dict[str, Dict[str, Any]] = {}
+        self._tasks: dict[str, dict[str, Any]] = {}
         self._initialized = True
         logger.info("[TaskManager] 已初始化")
 
@@ -115,7 +115,7 @@ class TaskManager:
         """移除任务"""
         self._tasks.pop(task_id, None)
 
-    def get_all_tasks(self) -> Dict[str, str]:
+    def get_all_tasks(self) -> dict[str, str]:
         """获取所有任务状态"""
         return {tid: info["status"] for tid, info in self._tasks.items()}
 

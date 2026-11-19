@@ -6,8 +6,9 @@
 3. set_usage_scope/reset_task_usage/get_task_usage 按 scope 累计 input/output/cost/calls/peak_in
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from app.agent.context.budget import (
     calibrate,

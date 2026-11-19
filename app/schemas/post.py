@@ -5,12 +5,10 @@
 """
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.post import PostStatus, PostVisibility
-
 
 # =============================================
 # 文章 Schema
@@ -18,12 +16,12 @@ from app.models.post import PostStatus, PostVisibility
 
 class PostBase(BaseModel):
     """文章基础 Schema"""
-    title: Optional[str] = Field(default=None, max_length=255, description="标题")
-    content: Optional[str] = Field(default=None, description="内容")
-    summary: Optional[str] = Field(default=None, description="摘要")
-    cover_image: Optional[str] = Field(default=None, max_length=500, description="封面图片")
-    category: Optional[str] = Field(default=None, max_length=50, description="分类")
-    tags: Optional[str] = Field(default=None, max_length=255, description="标签（逗号分隔）")
+    title: str | None = Field(default=None, max_length=255, description="标题")
+    content: str | None = Field(default=None, description="内容")
+    summary: str | None = Field(default=None, description="摘要")
+    cover_image: str | None = Field(default=None, max_length=500, description="封面图片")
+    category: str | None = Field(default=None, max_length=50, description="分类")
+    tags: str | None = Field(default=None, max_length=255, description="标签（逗号分隔）")
     visibility: PostVisibility = Field(default=PostVisibility.PUBLIC, description="可见性")
 
 
@@ -36,14 +34,14 @@ class PostCreate(PostBase):
 
     title: str = Field(min_length=1, max_length=255, description="标题")
     content: str = Field(min_length=1, description="内容")
-    category: Optional[str] = Field(default=None, max_length=50, description="分类")
-    tags: Optional[str] = Field(default=None, max_length=255, description="标签")
-    slug: Optional[str] = Field(default=None, max_length=255, description="URL Slug")
-    meta_description: Optional[str] = Field(default=None, max_length=160, description="SEO描述")
+    category: str | None = Field(default=None, max_length=50, description="分类")
+    tags: str | None = Field(default=None, max_length=255, description="标签")
+    slug: str | None = Field(default=None, max_length=255, description="URL Slug")
+    meta_description: str | None = Field(default=None, max_length=160, description="SEO描述")
 
     @field_validator("slug", mode="before")
     @classmethod
-    def generate_slug(cls, v: Optional[str], info) -> str:
+    def generate_slug(cls, v: str | None, info) -> str:
         """如果未提供 slug，从标题自动生成"""
         if v:
             return v.lower().replace(" ", "-")
@@ -58,16 +56,16 @@ class PostUpdate(BaseModel):
     用于更新文章（部分更新）。
     """
 
-    title: Optional[str] = Field(default=None, min_length=1, max_length=255, description="标题")
-    content: Optional[str] = Field(default=None, min_length=1, description="内容")
-    summary: Optional[str] = Field(default=None, description="摘要")
-    cover_image: Optional[str] = Field(default=None, max_length=500, description="封面图片")
-    category: Optional[str] = Field(default=None, max_length=50, description="分类")
-    tags: Optional[str] = Field(default=None, max_length=255, description="标签")
-    status: Optional[PostStatus] = Field(default=None, description="状态")
-    visibility: Optional[PostVisibility] = Field(default=None, description="可见性")
-    slug: Optional[str] = Field(default=None, max_length=255, description="URL Slug")
-    meta_description: Optional[str] = Field(default=None, max_length=160, description="SEO描述")
+    title: str | None = Field(default=None, min_length=1, max_length=255, description="标题")
+    content: str | None = Field(default=None, min_length=1, description="内容")
+    summary: str | None = Field(default=None, description="摘要")
+    cover_image: str | None = Field(default=None, max_length=500, description="封面图片")
+    category: str | None = Field(default=None, max_length=50, description="分类")
+    tags: str | None = Field(default=None, max_length=255, description="标签")
+    status: PostStatus | None = Field(default=None, description="状态")
+    visibility: PostVisibility | None = Field(default=None, description="可见性")
+    slug: str | None = Field(default=None, max_length=255, description="URL Slug")
+    meta_description: str | None = Field(default=None, max_length=160, description="SEO描述")
 
 
 class PostPublish(BaseModel):
@@ -85,8 +83,8 @@ class AuthorInfo(BaseModel):
 
     id: int = Field(description="作者ID")
     username: str = Field(description="用户名")
-    nickname: Optional[str] = Field(default=None, description="昵称")
-    avatar: Optional[str] = Field(default=None, description="头像")
+    nickname: str | None = Field(default=None, description="昵称")
+    avatar: str | None = Field(default=None, description="头像")
 
 
 class PostResponse(BaseModel):
@@ -101,21 +99,21 @@ class PostResponse(BaseModel):
     id: int = Field(description="文章ID")
     title: str = Field(description="标题")
     content: str = Field(description="内容")
-    summary: Optional[str] = Field(default=None, description="摘要")
-    cover_image: Optional[str] = Field(default=None, description="封面图片")
+    summary: str | None = Field(default=None, description="摘要")
+    cover_image: str | None = Field(default=None, description="封面图片")
     slug: str = Field(description="URL Slug")
-    category: Optional[str] = Field(default=None, description="分类")
-    tags: Optional[str] = Field(default=None, description="标签")
+    category: str | None = Field(default=None, description="分类")
+    tags: str | None = Field(default=None, description="标签")
     status: PostStatus = Field(description="状态")
     visibility: PostVisibility = Field(description="可见性")
     view_count: int = Field(description="阅读量")
     like_count: int = Field(description="点赞数")
     comment_count: int = Field(description="评论数")
-    meta_description: Optional[str] = Field(default=None, description="SEO描述")
+    meta_description: str | None = Field(default=None, description="SEO描述")
     author: AuthorInfo = Field(description="作者信息")
     created_at: datetime = Field(description="创建时间")
     updated_at: datetime = Field(description="更新时间")
-    published_at: Optional[datetime] = Field(default=None, description="发布时间")
+    published_at: datetime | None = Field(default=None, description="发布时间")
 
 
 class PostListItem(BaseModel):
@@ -129,16 +127,16 @@ class PostListItem(BaseModel):
 
     id: int = Field(description="文章ID")
     title: str = Field(description="标题")
-    summary: Optional[str] = Field(default=None, description="摘要")
-    cover_image: Optional[str] = Field(default=None, description="封面图片")
+    summary: str | None = Field(default=None, description="摘要")
+    cover_image: str | None = Field(default=None, description="封面图片")
     slug: str = Field(description="URL Slug")
-    category: Optional[str] = Field(default=None, description="分类")
+    category: str | None = Field(default=None, description="分类")
     status: PostStatus = Field(description="状态")
     view_count: int = Field(description="阅读量")
     like_count: int = Field(description="点赞数")
     author: AuthorInfo = Field(description="作者信息")
     created_at: datetime = Field(description="创建时间")
-    published_at: Optional[datetime] = Field(default=None, description="发布时间")
+    published_at: datetime | None = Field(default=None, description="发布时间")
 
 
 class PostStats(BaseModel):
@@ -154,9 +152,9 @@ class PostStats(BaseModel):
 
 class PostQueryParams(BaseModel):
     """文章查询参数 Schema"""
-    keyword: Optional[str] = Field(default=None, description="搜索关键词")
-    category: Optional[str] = Field(default=None, description="按分类筛选")
-    tag: Optional[str] = Field(default=None, description="按标签筛选")
-    status: Optional[PostStatus] = Field(default=None, description="按状态筛选")
-    author_id: Optional[int] = Field(default=None, description="按作者筛选")
-    visibility: Optional[PostVisibility] = Field(default=None, description="按可见性筛选")
+    keyword: str | None = Field(default=None, description="搜索关键词")
+    category: str | None = Field(default=None, description="按分类筛选")
+    tag: str | None = Field(default=None, description="按标签筛选")
+    status: PostStatus | None = Field(default=None, description="按状态筛选")
+    author_id: int | None = Field(default=None, description="按作者筛选")
+    visibility: PostVisibility | None = Field(default=None, description="按可见性筛选")

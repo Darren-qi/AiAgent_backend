@@ -1,9 +1,10 @@
 """Test services layer."""
 
-import pytest
-from unittest.mock import MagicMock, AsyncMock
-import sys
 import os
+import sys
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
@@ -27,8 +28,8 @@ class TestUserService:
     @pytest.mark.asyncio
     async def test_create_user(self):
         """测试创建用户（现契约：接收 UserCreate、返回 User 模型）"""
-        from app.services.user import UserService
         from app.schemas.user import UserCreate
+        from app.services.user import UserService
 
         db = MagicMock()
         db.add = MagicMock()

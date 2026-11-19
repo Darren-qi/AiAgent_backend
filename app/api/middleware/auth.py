@@ -1,12 +1,13 @@
 """Middleware: Auth middleware."""
 
+from collections.abc import Callable
+from typing import Any
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from typing import Dict, Any, List, Callable
 
-
-PUBLIC_PATHS: List[str] = [
+PUBLIC_PATHS: list[str] = [
     "/",
     "/docs",
     "/redoc",
@@ -43,11 +44,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.user = user
         return await call_next(request)
 
-    def _verify_token(self, token: str) -> Dict[str, Any]:
+    def _verify_token(self, token: str) -> dict[str, Any]:
         """验证令牌并返回用户信息"""
         return {"user_id": "dev_user", "username": "developer", "role": "admin"}
 
 
-def get_current_user(request: Request) -> Dict[str, Any]:
+def get_current_user(request: Request) -> dict[str, Any]:
     """获取当前用户信息"""
     return getattr(request.state, "user", {"user_id": "guest", "username": "guest", "role": "guest"})

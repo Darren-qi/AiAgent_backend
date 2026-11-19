@@ -5,15 +5,16 @@
 """
 
 import logging
-from typing import Optional, List, Dict, Any
-from sqlalchemy import select, delete
+from typing import Any
+
+from sqlalchemy import delete, select
 
 from app.db.session import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
 
 
-async def get_session_context(session_id: str, context_key: str) -> Optional[Any]:
+async def get_session_context(session_id: str, context_key: str) -> Any | None:
     """
     获取会话上下文的值
 
@@ -49,8 +50,9 @@ async def set_session_context(
         context_value: 上下文值
     """
     async with AsyncSessionLocal() as db:
-        from app.models import SessionContext
         from sqlalchemy import select
+
+        from app.models import SessionContext
 
         stmt = select(SessionContext).where(
             SessionContext.session_id == session_id,
@@ -72,7 +74,7 @@ async def set_session_context(
         await db.commit()
 
 
-async def get_all_session_contexts(session_id: str) -> Dict[str, Any]:
+async def get_all_session_contexts(session_id: str) -> dict[str, Any]:
     """
     获取会话的所有上下文
 
@@ -117,9 +119,9 @@ async def add_session_file(
     session_id: str,
     file_path: str,
     file_type: str = "other",
-    absolute_path: Optional[str] = None,
+    absolute_path: str | None = None,
     size: int = 0,
-    language: Optional[str] = None,
+    language: str | None = None,
     is_entrypoint: bool = False,
 ) -> None:
     """
@@ -151,7 +153,7 @@ async def add_session_file(
 
 async def add_session_files(
     session_id: str,
-    files: List[Dict[str, Any]],
+    files: list[dict[str, Any]],
 ) -> None:
     """
     批量添加会话生成的文件记录
@@ -180,8 +182,8 @@ async def add_session_files(
 
 async def get_session_files(
     session_id: str,
-    file_type: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    file_type: str | None = None,
+) -> list[dict[str, Any]]:
     """
     获取会话生成的文件列表
 
@@ -193,8 +195,9 @@ async def get_session_files(
         文件列表
     """
     async with AsyncSessionLocal() as db:
-        from app.models import SessionFile
         from sqlalchemy import select
+
+        from app.models import SessionFile
 
         stmt = select(SessionFile).where(SessionFile.session_id == session_id)
         if file_type:

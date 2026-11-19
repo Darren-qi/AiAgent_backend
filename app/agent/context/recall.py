@@ -5,14 +5,14 @@ embedding 在卸载时算好（每项一次），回忆侧只做内存余弦 + �
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
 
 from .config import ContextConfig
 from .items import ContextItem, ItemType, LoadState
 
 # 向量计算器：(text) -> embedding；None 表示未接入（跳过向量层）
-EmbedFn = Callable[[str], Optional[List[float]]]
+EmbedFn = Callable[[str], list[float] | None]
 
 
 @dataclass
@@ -20,37 +20,37 @@ class RecallResult:
     """可解释召回结果。"""
 
     triggered_by: str = ""          # trigger / vector / llm / none
-    matched_triggers: List[str] = field(default_factory=list)
-    loaded_ids: List[str] = field(default_factory=list)
+    matched_triggers: list[str] = field(default_factory=list)
+    loaded_ids: list[str] = field(default_factory=list)
     skipped: bool = False           # 未命中 → 跳过检索
     best_similarity: float = 0.0
-    reasons: List[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
 
 
 class RecallEngine:
     """按配置 mode 分层执行：off / trigger_only / trigger+vector。"""
 
     def __init__(self, cfg: ContextConfig,
-                 embed_fn: Optional[EmbedFn] = None,
-                 llm_judge_fn: Optional[Callable[[str, List[ContextItem]], List[str]]] = None
+                 embed_fn: EmbedFn | None = None,
+                 llm_judge_fn: Callable[[str, list[ContextItem]], list[str]] | None = None
                  ) -> None:
         self.cfg = cfg
         self.recall_cfg = cfg.recall
         self.embed_fn = embed_fn
         self.llm_judge_fn = llm_judge_fn
         # item_id -> embedding（卸载/注册时填充，由 manager 调 store_embedding）
-        self._vectors: Dict[str, List[float]] = {}
+        self._vectors: dict[str, list[float]] = {}
 
     # —— 向量登记（turn 卸载 / 注册时调用，回忆侧不再算） ——
 
-    def store_embedding(self, item_id: str, embedding: List[float]) -> None:
+    def store_embedding(self, item_id: str, embedding: list[float]) -> None:
         self._vectors[item_id] = embedding
 
     def has_embedding(self, item_id: str) -> bool:
         """该项是否已算过向量（卸载补算的幂等判断）。"""
         return item_id in self._vectors
 
-    def _similarity(self, query_vec: List[float], item_id: str) -> float:
+    def _similarity(self, query_vec: list[float], item_id: str) -> float:
         from .scoring import cosine
         vec = self._vectors.get(item_id)
         if vec is None:
@@ -59,7 +59,7 @@ class RecallEngine:
 
     # —— 分层召回 ——
 
-    def recall(self, query: str, items: Dict[str, ContextItem],
+    def recall(self, query: str, items: dict[str, ContextItem],
                current_step: int = 0) -> RecallResult:
         rc = self.recall_cfg
         result = RecallResult()
@@ -69,7 +69,7 @@ class RecallEngine:
             return result
 
         # —— 第 1 层：触发词（快、粗；按用户铁律只是快速路径）——
-        hits: List[str] = []
+        hits: list[str] = []
         for word, ids in (self.cfg.trigger_map or {}).items():
             if word and word in (query or ""):
                 result.matched_triggers.append(word)

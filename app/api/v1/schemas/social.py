@@ -1,6 +1,6 @@
 """Social Schema"""
 
-from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -15,5 +15,5 @@ class SocialSendRequest(BaseModel):
 class SocialSendResponse(BaseModel):
     """社交发送响应"""
     success: bool
-    message_id: Optional[str] = None
-    error: Optional[str] = None
+    message_id: str | None = None
+    error: str | None = None

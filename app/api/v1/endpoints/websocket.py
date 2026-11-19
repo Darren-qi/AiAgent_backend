@@ -1,10 +1,12 @@
 """WebSocket 端点"""
 
-from typing import Dict, Any
+import json
+from typing import Any
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
 from app.agent.graphs.main_graph import AgentGraph
 from app.agent.memory.manager import MemoryManager
-import json
 
 router = APIRouter()
 
@@ -13,8 +15,8 @@ class ConnectionManager:
     """WebSocket 连接管理器"""
 
     def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
-        self.memory_managers: Dict[str, MemoryManager] = {}
+        self.active_connections: dict[str, WebSocket] = {}
+        self.memory_managers: dict[str, MemoryManager] = {}
 
     async def connect(self, websocket: WebSocket, session_id: str) -> None:
         await websocket.accept()
@@ -109,7 +111,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
 
 @router.get("/ws/list")
-async def list_connections() -> Dict[str, Any]:
+async def list_connections() -> dict[str, Any]:
     """列出所有活跃连接"""
     return {
         "active_connections": len(manager.active_connections),

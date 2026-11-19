@@ -2,14 +2,15 @@
 
 import asyncio
 import json
-import re
 import logging
-from typing import Dict, Any, List, Optional
+import re
+from typing import Any
 
-from app.agent.llm.factory import LLMFactory
 from app.agent.graphs.nodes.llm_chat_mixin import LLMChatMixin
+from app.agent.llm.factory import LLMFactory
 from app.agent.skills.core.progressive_loader import (
-    get_loader, validate_params_structure,
+    get_loader,
+    validate_params_structure,
 )
 
 logger = logging.getLogger(__name__)
@@ -411,9 +412,9 @@ class Planner(LLMChatMixin):
 请优化计划："""
 
     def __init__(self):
-        self._llm_factory: Optional[LLMFactory] = None
+        self._llm_factory: LLMFactory | None = None
         self._use_llm = True
-        self._task_id: Optional[str] = None
+        self._task_id: str | None = None
         self._fallback_intents = {
             "crawler": ["http_client", "data_processor"],
             "code": ["code_generator"],
@@ -436,7 +437,7 @@ class Planner(LLMChatMixin):
             self._llm_factory = LLMFactory.get_instance()
         return self._llm_factory
 
-    def _get_skill_list_str(self, stage: Optional[str] = None) -> str:
+    def _get_skill_list_str(self, stage: str | None = None) -> str:
         """生成 Skill 列表字符串（从渐进式加载器获取）。
 
         阶段四：stage=None 全量（默认不回归）；stage="plan" 规划早期只读集；
@@ -455,7 +456,7 @@ class Planner(LLMChatMixin):
                 lines.append(f"- **{name}**: {info['description']} | 参数: {params} | 适用: {use_for}")
             return "\n".join(lines)
 
-    async def create_plan(self, task: str, intent: str) -> List[Dict[str, Any]]:
+    async def create_plan(self, task: str, intent: str) -> list[dict[str, Any]]:
         """
         创建执行计划
 
@@ -483,7 +484,7 @@ class Planner(LLMChatMixin):
         logger.info(f"[Planner] 使用启发式规划，包含 {len(plan)} 个步骤")
         return plan
 
-    async def create_quick_todos(self, task: str) -> List[Dict[str, Any]]:
+    async def create_quick_todos(self, task: str) -> list[dict[str, Any]]:
         """
         快速生成简洁的待办列表
 
@@ -521,7 +522,7 @@ class Planner(LLMChatMixin):
         # 降级：返回简单待办
         return self._create_fallback_todos(task)
 
-    def _parse_quick_todos(self, content: str) -> List[Dict[str, Any]]:
+    def _parse_quick_todos(self, content: str) -> list[dict[str, Any]]:
         """解析快速待办输出；识别 [SIMPLE] 标记（简单任务初判，只保留 1 条直接执行）"""
         todos = []
         lines = content.split('\n')
@@ -559,7 +560,7 @@ class Planner(LLMChatMixin):
 
         return todos
 
-    def _create_fallback_todos(self, task: str) -> List[Dict[str, Any]]:
+    def _create_fallback_todos(self, task: str) -> list[dict[str, Any]]:
         """创建降级待办"""
         return [{
             "id": 1,
@@ -569,7 +570,7 @@ class Planner(LLMChatMixin):
             "status": "pending"
         }]
 
-    async def think(self, task: str, todo: Dict[str, Any], context: str = "") -> str:
+    async def think(self, task: str, todo: dict[str, Any], context: str = "") -> str:
         """
         Thought 阶段：分析当前状态
 
@@ -607,9 +608,9 @@ class Planner(LLMChatMixin):
     async def plan_action(
         self,
         task: str,
-        todo: Dict[str, Any],
+        todo: dict[str, Any],
         thought: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Planning 阶段：生成执行动作
 
@@ -726,13 +727,13 @@ class Planner(LLMChatMixin):
     async def plan_action_with_feedback(
         self,
         task: str,
-        todo: Dict[str, Any],
+        todo: dict[str, Any],
         thought: str,
         last_error: str = None,
         last_result: str = None,
         last_action: str = None,
         last_error_code: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Planning 阶段：生成执行动作（带错误反馈）
 
@@ -852,7 +853,7 @@ title: {todo.get("title", "")}
                 "reason": f"降级执行（LLM 调用失败: {e}）"
             }
 
-    def _refresh_params_invalid(self, plan_result: Dict[str, Any]) -> None:
+    def _refresh_params_invalid(self, plan_result: dict[str, Any]) -> None:
         """_ensure_required_params 之后重算 params_invalid 标记。
 
         补默认键可能修复/恶化结构，以最终 params 为准（阶段一：
@@ -950,9 +951,9 @@ title: {todo.get("title", "")}
     def _ensure_required_params(
         self,
         action: str,
-        params: Dict[str, Any],
-        todo: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        params: dict[str, Any],
+        todo: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         确保必要参数存在，必要时从 session 查询或设置默认值
 
@@ -985,7 +986,7 @@ title: {todo.get("title", "")}
 
         return params
 
-    def _parse_planning_response(self, content: str, todo: Dict[str, Any]) -> Dict[str, Any]:
+    def _parse_planning_response(self, content: str, todo: dict[str, Any]) -> dict[str, Any]:
         """解析 Planning 阶段的响应"""
         result = {
             "action": todo.get("action") or "general_response",
@@ -1046,7 +1047,7 @@ title: {todo.get("title", "")}
 
         return result
 
-    def _extract_json(self, text: str) -> Optional[Any]:
+    def _extract_json(self, text: str) -> Any | None:
         """
         从文本中提取 JSON 对象/数组，支持不规范的 LLM 输出。
 
@@ -1125,7 +1126,7 @@ title: {todo.get("title", "")}
 
         return None
 
-    def _parse_key_value_params(self, params_str: str) -> Dict[str, Any]:
+    def _parse_key_value_params(self, params_str: str) -> dict[str, Any]:
         """
         解析 key-value 格式的参数
 
@@ -1202,12 +1203,12 @@ title: {todo.get("title", "")}
     async def observe(
         self,
         task: str,
-        todo: Dict[str, Any],
+        todo: dict[str, Any],
         action: str,
-        params: Dict[str, Any],
-        result: Dict[str, Any],
+        params: dict[str, Any],
+        result: dict[str, Any],
         extra_context: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Observation 阶段：验证执行结果
 
@@ -1271,7 +1272,7 @@ title: {todo.get("title", "")}
                 "files_mentioned": [],
             }
 
-    def _parse_observation_response(self, content: str) -> Dict[str, Any]:
+    def _parse_observation_response(self, content: str) -> dict[str, Any]:
         """解析 Observation 阶段的响应"""
         result = {
             "completed": False,
@@ -1316,7 +1317,7 @@ title: {todo.get("title", "")}
 
         return result
 
-    async def analyze_plan(self, task: str, plan: List[Dict[str, Any]]) -> str:
+    async def analyze_plan(self, task: str, plan: list[dict[str, Any]]) -> str:
         """
         对执行计划中的每个步骤进行深入分析
 
@@ -1359,7 +1360,7 @@ title: {todo.get("title", "")}
             # 降级：返回简单描述
             return self._generate_simple_analysis(plan)
 
-    async def _create_plan_with_llm(self, task: str, intent: str) -> Optional[List[Dict[str, Any]]]:
+    async def _create_plan_with_llm(self, task: str, intent: str) -> list[dict[str, Any]] | None:
         """使用 LLM 生成执行计划"""
         # 规划早期（todos 未建）→ 只读集（阶段四白名单）
         skill_list = self._get_skill_list_str(stage="plan")
@@ -1383,7 +1384,7 @@ title: {todo.get("title", "")}
         content = response.content.strip()
         return self._parse_plan(content, task, intent)
 
-    def _create_heuristic_plan(self, task: str, intent: str) -> List[Dict[str, Any]]:
+    def _create_heuristic_plan(self, task: str, intent: str) -> list[dict[str, Any]]:
         """基于意图的启发式规划（降级方案）"""
         base_actions = self._fallback_intents.get(intent, ["general_response"])
 
@@ -1400,7 +1401,7 @@ title: {todo.get("title", "")}
 
         return plan
 
-    def _generate_params_for_action(self, action: str, task: str) -> Dict[str, Any]:
+    def _generate_params_for_action(self, action: str, task: str) -> dict[str, Any]:
         """为 Skill 生成参数"""
         if action == "http_client":
             # 尝试从任务中提取 URL
@@ -1444,7 +1445,7 @@ title: {todo.get("title", "")}
         }
         return descriptions.get(action, "执行操作")
 
-    async def _retrieve_similar_experiences(self, task: str) -> Optional[str]:
+    async def _retrieve_similar_experiences(self, task: str) -> str | None:
         """从经验库检索相似经验（预留接口）"""
         # TODO: 后续集成经验库
         # from app.agent.experience.retriever import ExperienceRetriever
@@ -1453,7 +1454,7 @@ title: {todo.get("title", "")}
         # ...
         return None
 
-    def _parse_plan(self, content: str, task: str, intent: str) -> Optional[List[Dict[str, Any]]]:
+    def _parse_plan(self, content: str, task: str, intent: str) -> list[dict[str, Any]] | None:
         """解析 LLM 返回的计划"""
         # 尝试直接解析 JSON
         try:
@@ -1477,7 +1478,7 @@ title: {todo.get("title", "")}
         logger.warning(f"[Planner] 无法解析 LLM 计划，触发降级")
         return None
 
-    def _validate_and_normalize_plan(self, plan: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _validate_and_normalize_plan(self, plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """验证并标准化计划"""
         valid_actions = set(AVAILABLE_SKILLS.keys())
         validated_plan = []
@@ -1502,9 +1503,9 @@ title: {todo.get("title", "")}
 
     async def refine_plan(
         self,
-        plan: List[Dict[str, Any]],
+        plan: list[dict[str, Any]],
         feedback: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         根据反馈优化计划
 
@@ -1547,9 +1548,9 @@ title: {todo.get("title", "")}
 
     def _simple_plan_adjustment(
         self,
-        plan: List[Dict[str, Any]],
+        plan: list[dict[str, Any]],
         feedback: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """简单的计划调整（降级方案）"""
         feedback_lower = feedback.lower()
 
@@ -1566,7 +1567,7 @@ title: {todo.get("title", "")}
 
         return plan
 
-    def _generate_simple_analysis(self, plan: List[Dict[str, Any]]) -> str:
+    def _generate_simple_analysis(self, plan: list[dict[str, Any]]) -> str:
         """生成简单的计划分析（降级方案）"""
         analyses = []
         for i, step in enumerate(plan):
@@ -1580,7 +1581,7 @@ title: {todo.get("title", "")}
             )
         return "\n\n".join(analyses)
 
-    def get_available_skills(self) -> Dict[str, Dict[str, Any]]:
+    def get_available_skills(self) -> dict[str, dict[str, Any]]:
         """获取所有可用 Skill"""
         try:
             loader = get_loader()
@@ -1590,7 +1591,7 @@ title: {todo.get("title", "")}
             logger.warning(f"[Planner] 获取 Skill 列表失败: {e}，使用备用方案")
             return AVAILABLE_SKILLS.copy()
 
-    def get_skill_info(self, action: str) -> Optional[Dict[str, Any]]:
+    def get_skill_info(self, action: str) -> dict[str, Any] | None:
         """获取指定 Skill 的信息"""
         try:
             loader = get_loader()

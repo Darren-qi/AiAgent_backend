@@ -1,9 +1,10 @@
 """Test API endpoints."""
 
-import pytest
-from httpx import AsyncClient, ASGITransport
-import sys
 import os
+import sys
+
+import pytest
+from httpx import ASGITransport, AsyncClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 

@@ -8,14 +8,17 @@
 """
 
 import asyncio
+import importlib
+import logging
 import re
 import sys
-import yaml
-import logging
-import importlib
-from pathlib import Path
-from typing import Dict, List, Optional, Any, Set, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
 from app.agent.skills.core.base_skill import SkillResult
 
 logger = logging.getLogger(__name__)
@@ -32,9 +35,9 @@ class SkillMetadata:
     description: str
     version: str = "1.0.0"
     author: str = "system"
-    tags: List[str] = field(default_factory=list)
-    parameters: Dict[str, Any] = field(default_factory=dict)  # JSON Schema
-    operation_targets: Dict[str, List[str]] = field(default_factory=dict)  # 操作→目标参数契约
+    tags: list[str] = field(default_factory=list)
+    parameters: dict[str, Any] = field(default_factory=dict)  # JSON Schema
+    operation_targets: dict[str, list[str]] = field(default_factory=dict)  # 操作→目标参数契约
     usage: str = ""  # 出错 JIT 注入的调用须知（渐进第三级）
     # === 阶段二（2026-11-16）：对齐 AutoGen ToolMeta 的 Harness 元数据 ===
     risk: str = ""  # read/write/exec/network（空=未声明，bootstrap 打 warning）
@@ -47,12 +50,12 @@ class SkillMetadata:
     #   conditional 可用世界状态核验（move/delete/edit）→ 核验后决定
     #   once        不可重放（exec/network/未声明）→ 崩溃残留返回 AMBIGUOUS_SIDE_EFFECT
     # 未声明按 risk/retry 推导，兜底 once（不可重放）。
-    op_semantics: Dict[str, str] = field(default_factory=dict)
+    op_semantics: dict[str, str] = field(default_factory=dict)
     stage: str = "both"  # plan/execute/both：阶段四 stage 白名单消费
     file_path: Path = field(default=None)
     skill_dir: Path = field(default=None)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "description": self.description,
@@ -120,7 +123,7 @@ class SkillMetadata:
         return min(score, 1.0)
 
     @staticmethod
-    def _extract_keywords(text: str) -> List[str]:
+    def _extract_keywords(text: str) -> list[str]:
         """从文本中提取关键词"""
         # 移除停用词，提取有意义的词
         stopwords = {"的", "是", "在", "和", "了", "用", "于", "或", "及", "可", "能", "支", "持", "当", "用", "时"}
@@ -133,7 +136,7 @@ class SkillInfo:
     """Skill 完整信息"""
     metadata: SkillMetadata
     full_content: str = ""  # 完整 SKILL.md 内容
-    skill_module: Optional[Any] = None  # 执行时加载
+    skill_module: Any | None = None  # 执行时加载
 
 
 class ProgressiveSkillLoader:
@@ -149,8 +152,8 @@ class ProgressiveSkillLoader:
 
     def __init__(
         self,
-        skills_root: Optional[Path] = None,
-        external_root: Optional[Path] = None
+        skills_root: Path | None = None,
+        external_root: Path | None = None
     ):
         """
         Args:
@@ -161,21 +164,21 @@ class ProgressiveSkillLoader:
         self.external_root = external_root
 
         # 索引数据（启动时加载）
-        self._index: Dict[str, SkillMetadata] = {}
+        self._index: dict[str, SkillMetadata] = {}
 
         # 完整内容缓存（按需加载）
-        self._content_cache: Dict[str, str] = {}
+        self._content_cache: dict[str, str] = {}
 
         # 模块缓存（执行时加载）
-        self._module_cache: Dict[str, Any] = {}
+        self._module_cache: dict[str, Any] = {}
         # 模块文件 mtime（阶段七：变更即失效重载，改 skill.py 不用重启进程）
-        self._module_mtimes: Dict[str, float] = {}
+        self._module_mtimes: dict[str, float] = {}
 
         # Skill 执行器工厂
-        self._executors: Dict[str, Callable] = {}
+        self._executors: dict[str, Callable] = {}
 
         # 阶段七：运行时下架集合（guard 白名单同步拒绝、prompt 注入剔除）
-        self._disabled: Set[str] = set()
+        self._disabled: set[str] = set()
 
         # 是否已初始化
         self._bootstrapped = False
@@ -293,10 +296,12 @@ class ProgressiveSkillLoader:
         # 幂等语义声明（2026-11-18 写操作意图日志）：只收三个合法值，
         # 非法值丢弃 → 走 risk/retry 推导，兜底 once（不可重放）
         op_semantics_raw = data.get("op_semantics") or {}
-        op_semantics: Dict[str, str] = {}
+        op_semantics: dict[str, str] = {}
         if isinstance(op_semantics_raw, dict):
             from app.agent.execution_journal import (
-                CONDITIONAL, IDEMPOTENT, ONCE,
+                CONDITIONAL,
+                IDEMPOTENT,
+                ONCE,
             )
             _valid = {IDEMPOTENT, CONDITIONAL, ONCE}
             op_semantics = {
@@ -334,7 +339,7 @@ class ProgressiveSkillLoader:
             skill_dir=skill_dir,
         )
 
-    def _parse_yaml(self, yaml_str: str) -> Dict[str, Any]:
+    def _parse_yaml(self, yaml_str: str) -> dict[str, Any]:
         """解析 YAML 字符串"""
         try:
             return yaml.safe_load(yaml_str) or {}
@@ -342,7 +347,7 @@ class ProgressiveSkillLoader:
             logger.warning(f"[ProgressiveLoader] YAML 解析错误: {e}")
             return {}
 
-    def match(self, query: str, top_k: int = 5) -> List[SkillMetadata]:
+    def match(self, query: str, top_k: int = 5) -> list[SkillMetadata]:
         """
         基于用户意图匹配候选 Skill
 
@@ -363,7 +368,7 @@ class ProgressiveSkillLoader:
         scores.sort(key=lambda x: x[0], reverse=True)
         return [m for _, m in scores[:top_k]]
 
-    def match_by_tags(self, tags: List[str]) -> List[SkillMetadata]:
+    def match_by_tags(self, tags: list[str]) -> list[SkillMetadata]:
         """
         基于标签匹配 Skill
 
@@ -379,17 +384,17 @@ class ProgressiveSkillLoader:
                 results.append(metadata)
         return results
 
-    def get_metadata(self, name: str) -> Optional[SkillMetadata]:
+    def get_metadata(self, name: str) -> SkillMetadata | None:
         """获取 Skill 元数据"""
         return self._index.get(name)
 
-    def get_all_metadata(self) -> List[SkillMetadata]:
+    def get_all_metadata(self) -> list[SkillMetadata]:
         """获取所有 Skill 元数据"""
         return list(self._index.values())
 
     # === 阶段二：注册中心查询 API（阶段三 RunGuard / 阶段四白名单消费）===
 
-    def get_by_stage(self, stage: str) -> List[SkillMetadata]:
+    def get_by_stage(self, stage: str) -> list[SkillMetadata]:
         """按阶段取技能：stage=plan 返回规划期可用集（both + plan）。"""
         return [
             m for m in self._index.values()
@@ -397,14 +402,14 @@ class ProgressiveSkillLoader:
             and (m.stage == stage or m.stage == "both")
         ]
 
-    def get_by_risk(self, risk: str) -> List[SkillMetadata]:
+    def get_by_risk(self, risk: str) -> list[SkillMetadata]:
         """按风险分级取技能（read/write/exec/network）。"""
         return [
             m for m in self._index.values()
             if m.name not in self._disabled and m.risk == risk
         ]
 
-    def get_guard_meta(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_guard_meta(self, name: str) -> dict[str, Any] | None:
         """RunGuard 消费的元数据切片（未注册/已下架返回 None → UNKNOWN_SKILL）。"""
         m = self._index.get(name)
         if not m or name in self._disabled:
@@ -421,7 +426,7 @@ class ProgressiveSkillLoader:
             "parameters": m.parameters,
         }
 
-    def get_full_content(self, name: str) -> Optional[str]:
+    def get_full_content(self, name: str) -> str | None:
         """
         获取完整 SKILL.md 内容（按需加载）
 
@@ -447,7 +452,7 @@ class ProgressiveSkillLoader:
             logger.error(f"[ProgressiveLoader] 读取 {name} 内容失败: {e}")
             return None
 
-    def get_skill_info(self, name: str) -> Optional[SkillInfo]:
+    def get_skill_info(self, name: str) -> SkillInfo | None:
         """
         获取 Skill 完整信息
 
@@ -497,7 +502,7 @@ class ProgressiveSkillLoader:
             logger.info("[ProgressiveLoader] 技能已重新上架: %s", name)
         return was
 
-    async def execute(self, name: str, params: Dict[str, Any]) -> "SkillResult":
+    async def execute(self, name: str, params: dict[str, Any]) -> "SkillResult":
         """
         执行 Skill（动态加载模块）
 
@@ -563,8 +568,13 @@ class ProgressiveSkillLoader:
         # 决策三种：execute 放行 / replay 直接返回上次结果 / ambiguous 返回
         # AMBIGUOUS_SIDE_EFFECT 让模型先核验再决定（禁止盲目重发）。
         from app.agent.execution_journal import (
-            AMBIGUOUS, CONDITIONAL, REPLAY,
-            close_journal, mark_ambiguous, open_journal, resolve_semantics,
+            AMBIGUOUS,
+            CONDITIONAL,
+            REPLAY,
+            close_journal,
+            mark_ambiguous,
+            open_journal,
+            resolve_semantics,
             snapshot_result,
         )
 
@@ -649,7 +659,7 @@ class ProgressiveSkillLoader:
         )
         return _done(result)
 
-    async def _verify_replay(self, name: str, params: Dict[str, Any]):
+    async def _verify_replay(self, name: str, params: dict[str, Any]):
         """conditional 语义的世界状态核验器（技能可选提供 `verify_replay`）。
 
         返回 True=已生效 / False=未生效 / None=无法判定（退化为按状态判定）。
@@ -669,7 +679,7 @@ class ProgressiveSkillLoader:
             logger.warning("[ProgressiveLoader] %s verify_replay 异常: %s", name, e)
             return None
 
-    async def _invoke(self, name: str, params: Dict[str, Any]) -> "SkillResult":
+    async def _invoke(self, name: str, params: dict[str, Any]) -> "SkillResult":
         """单次技能调用（executor 优先，其次动态模块），不带守卫/重试。
 
         所有技能级异常在内部兜底为 SkillResult，不向外抛
@@ -714,7 +724,7 @@ class ProgressiveSkillLoader:
             return SkillResult(
                 success=False, error=str(e), error_code="EXEC_FAILED")
 
-    def _load_module(self, name: str) -> Optional[Any]:
+    def _load_module(self, name: str) -> Any | None:
         """
         动态加载 Skill 模块
 
@@ -814,11 +824,11 @@ class ProgressiveSkillLoader:
 
         return False
 
-    def get_schemas(self) -> List[Dict[str, Any]]:
+    def get_schemas(self) -> list[dict[str, Any]]:
         """获取所有 Skill 的 Schema（用于 LLM 规划）"""
         return [m.to_dict() for m in self._index.values()]
 
-    def get_skill_list_str(self, stage: Optional[str] = None) -> str:
+    def get_skill_list_str(self, stage: str | None = None) -> str:
         """
         获取 Skill 列表字符串（用于 prompt）
 
@@ -843,7 +853,7 @@ class ProgressiveSkillLoader:
         return "\n".join(lines)
 
     @staticmethod
-    def _load_deny_risks() -> Set[str]:
+    def _load_deny_risks() -> set[str]:
         """读取 tool_deny_risks 配置（默认空=不过滤）。"""
         try:
             from app.core.config import get_settings
@@ -857,8 +867,8 @@ class ProgressiveSkillLoader:
 
 def filter_skills_by_policy(
     metas: Any,
-    stage: Optional[str] = None,
-    deny_risks: Optional[Set[str]] = None,
+    stage: str | None = None,
+    deny_risks: set[str] | None = None,
 ) -> list:
     """阶段四动态白名单过滤（纯函数，供 get_skill_list_str 与测试共用）。
 
@@ -884,7 +894,7 @@ def filter_skills_by_policy(
     return out
 
 
-def validate_params_structure(name: str, params: Any) -> Optional[str]:
+def validate_params_structure(name: str, params: Any) -> str | None:
     """参数结构崩坏防线（TC-S16-04，2026-11-14 生产取证）。
 
     现场：模型把大文件内容内联进参数 JSON，输出结构崩坏——解析出的
@@ -936,7 +946,7 @@ def classify_params_problem(prob: str) -> str:
     return "MISSING_PARAM"
 
 
-def classify_tool_error(error: Optional[str]) -> Optional[str]:
+def classify_tool_error(error: str | None) -> str | None:
     """skill 返回的 error 文案 → error_code（缺参报错统一改写）。
 
     只改写能高置信分类的形态；其余保持 None 走字符串兜底，
@@ -959,7 +969,7 @@ def _stamp_error_code(result: "SkillResult") -> "SkillResult":
 
 
 # 全局加载器实例
-_global_loader: Optional[ProgressiveSkillLoader] = None
+_global_loader: ProgressiveSkillLoader | None = None
 
 
 def get_loader() -> ProgressiveSkillLoader:

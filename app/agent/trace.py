@@ -14,15 +14,15 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # 进程级状态：configure_run_log 在每个 turn 开始时重置
-_state: Dict[str, Any] = {"path": None, "session_id": None}
+_state: dict[str, Any] = {"path": None, "session_id": None}
 
 
-def configure_run_log(session_id: Optional[str]) -> None:
+def configure_run_log(session_id: str | None) -> None:
     """turn 开始时调用：打开本 turn 的 run 日志文件。
 
     session_id 为空（单测/无会话）→ 禁用落盘，run_log 变 no-op。
@@ -43,7 +43,7 @@ def configure_run_log(session_id: Optional[str]) -> None:
         _state["path"] = None
 
 
-def get_run_log_path() -> Optional[Path]:
+def get_run_log_path() -> Path | None:
     """当前 turn 的 run 日志路径（未启用返回 None）。测试/排障用。"""
     return _state.get("path")
 
@@ -67,7 +67,7 @@ def run_log(event: str, **fields: Any) -> None:
         logger.warning("[Trace] run 日志写入失败（忽略）: %s", e)
 
 
-def params_digest(params: Any) -> Dict[str, Any]:
+def params_digest(params: Any) -> dict[str, Any]:
     """params 摘要：只存键名列表与序列化大小，不存全文。"""
     try:
         if isinstance(params, dict):

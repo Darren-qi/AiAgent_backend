@@ -1,12 +1,12 @@
 """记忆管理器"""
 
-from typing import Any, Dict, Optional, List
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.memory.long_term import LongTermMemory
 from app.agent.memory.pgsaver import PostgresSaver
 from app.agent.memory.short_term import ShortTermMemory
-from app.agent.memory.long_term import LongTermMemory
 
 
 class MemoryManager:
@@ -15,7 +15,7 @@ class MemoryManager:
     def __init__(
         self,
         session_id: str,
-        db_session: Optional[AsyncSession] = None,
+        db_session: AsyncSession | None = None,
     ):
         self.session_id = session_id
         self.db_saver = PostgresSaver(db_session) if db_session else None
@@ -34,19 +34,19 @@ class MemoryManager:
         await self.short_term.load_from_db()
         await self.long_term.load_from_db()
 
-    async def add_user_message(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+    async def add_user_message(self, content: str, metadata: dict[str, Any] | None = None) -> None:
         """添加用户消息（异步保存到数据库）"""
         await self.short_term.add_message("user", content, metadata)
 
-    async def add_assistant_message(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+    async def add_assistant_message(self, content: str, metadata: dict[str, Any] | None = None) -> None:
         """添加助手消息（异步保存到数据库）"""
         await self.short_term.add_message("assistant", content, metadata)
 
-    async def add_system_message(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+    async def add_system_message(self, content: str, metadata: dict[str, Any] | None = None) -> None:
         """添加系统消息（异步保存到数据库）"""
         await self.short_term.add_message("system", content, metadata)
 
-    def get_conversation_history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_conversation_history(self, limit: int | None = None) -> list[dict[str, Any]]:
         """获取对话历史"""
         return self.short_term.get_messages(limit)
 
@@ -60,11 +60,11 @@ class MemoryManager:
         """记住事实"""
         await self.long_term.add_fact(key, value)
 
-    async def recall_fact(self, key: str) -> Optional[Any]:
+    async def recall_fact(self, key: str) -> Any | None:
         """回忆事实"""
         return await self.long_term.get_fact(key)
 
-    async def search_memory(self, query: str) -> List[Dict[str, Any]]:
+    async def search_memory(self, query: str) -> list[dict[str, Any]]:
         """搜索记忆"""
         semantic_results = await self.long_term.search_facts(query)
         return semantic_results
@@ -78,7 +78,7 @@ class MemoryManager:
         await self.long_term.semantic.clear()
         await self.long_term.episodic.clear()
 
-    def get_context_for_llm(self, max_messages: int = 20) -> List[Dict[str, str]]:
+    def get_context_for_llm(self, max_messages: int = 20) -> list[dict[str, str]]:
         """获取用于 LLM 的上下文"""
         messages = self.get_conversation_history(limit=max_messages)
         return [{"role": m["role"], "content": m["content"]} for m in messages]

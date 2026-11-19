@@ -1,17 +1,17 @@
 """企业微信机器人"""
 
-from typing import Optional
+
 import httpx
 
 
 class WeComBot:
     """企业微信机器人"""
 
-    def __init__(self, webhook_url: str, secret: Optional[str] = None):
+    def __init__(self, webhook_url: str, secret: str | None = None):
         self.webhook_url = webhook_url
         self.secret = secret
 
-    async def send_text(self, content: str, mentioned_list: Optional[list] = None) -> bool:
+    async def send_text(self, content: str, mentioned_list: list | None = None) -> bool:
         """发送文本消息"""
         msg = {
             "msgtype": "text",

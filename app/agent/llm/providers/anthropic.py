@@ -2,7 +2,8 @@
 
 import os
 import time
-from typing import AsyncIterator, Dict, Any
+from collections.abc import AsyncIterator
+from typing import Any
 
 from anthropic import AsyncAnthropic
 
@@ -37,7 +38,7 @@ class AnthropicProvider(BaseLLMProvider):
             else:
                 messages.append({"role": msg.role, "content": msg.content})
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self.config.name,
             "messages": messages,
             "temperature": request.temperature,
@@ -87,7 +88,7 @@ class AnthropicProvider(BaseLLMProvider):
             else:
                 messages.append({"role": msg.role, "content": msg.content})
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self.config.name,
             "messages": messages,
             "temperature": request.temperature,

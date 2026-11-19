@@ -3,7 +3,8 @@
 """
 
 import logging
-from typing import TYPE_CHECKING, Dict, Any, List, Optional
+from typing import TYPE_CHECKING, Any
+
 from app.agent.graphs.nodes.llm_chat_mixin import LLMChatMixin
 
 if TYPE_CHECKING:
@@ -50,7 +51,7 @@ class Integrator(LLMChatMixin):
 
     def __init__(self):
         self._llm_factory = None
-        self._task_id: Optional[str] = None
+        self._task_id: str | None = None
 
     def set_task_id(self, task_id: str) -> None:
         """设置任务 ID，用于可取消的 LLM 调用"""
@@ -86,7 +87,7 @@ class Integrator(LLMChatMixin):
             return str(result)
         return str(result)
 
-    def _format_multiple_results(self, results: List[Any]) -> str:
+    def _format_multiple_results(self, results: list[Any]) -> str:
         parts = []
         for i, result in enumerate(results, 1):
             if isinstance(result, dict):
@@ -97,7 +98,7 @@ class Integrator(LLMChatMixin):
 
         return "\n\n".join(parts)
 
-    async def summarize(self, results: List[Any], task: str) -> str:
+    async def summarize(self, results: list[Any], task: str) -> str:
         """
         对结果进行摘要
 
@@ -123,9 +124,9 @@ class Integrator(LLMChatMixin):
     async def generate_completion_summary(
         self,
         task: str,
-        todos: List[Dict[str, Any]],
-        results: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        todos: list[dict[str, Any]],
+        results: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """
         生成任务完成总结
 
@@ -183,8 +184,8 @@ class Integrator(LLMChatMixin):
 
     def _format_todos_results(
         self,
-        todos: List[Dict[str, Any]],
-        results: List[Dict[str, Any]]
+        todos: list[dict[str, Any]],
+        results: list[dict[str, Any]]
     ) -> str:
         """格式化待办和结果"""
         parts = []
@@ -203,7 +204,7 @@ class Integrator(LLMChatMixin):
         return "\n".join(parts)
 
     @staticmethod
-    def _extract_suggestions(summary: str) -> List[str]:
+    def _extract_suggestions(summary: str) -> list[str]:
         """从总结中提取建议（容忍 `-`/`*`/`1.`/`1、` 四种列表行）。
 
         2026-11-12：建议段已移到正文最前——改为取 marker 后、下一个 `###`
@@ -251,9 +252,9 @@ class Integrator(LLMChatMixin):
     def _generate_simple_summary(
         self,
         task: str,
-        todos: List[Dict[str, Any]],
-        results: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        todos: list[dict[str, Any]],
+        results: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """生成简单的总结（降级方案）"""
         completed = sum(1 for r in results if r.get("success", False))
         total = len(results)

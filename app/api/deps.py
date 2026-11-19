@@ -5,23 +5,22 @@ API 依赖项模块
 这些依赖项可以在路由函数中直接注入使用。
 """
 
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import AsyncSessionLocal
-from app.core.security import verify_access_token
 from app.core.exceptions import (
-    UnauthorizedException, InvalidTokenException,
     InsufficientPermissionsException,
+    InvalidTokenException,
+    UnauthorizedException,
 )
+from app.core.security import verify_access_token
+from app.db.session import AsyncSessionLocal
 from app.models.user import User
-
 
 # =============================================
 # 安全认证
@@ -51,7 +50,7 @@ async def get_db_session():
 # 当前用户依赖
 # =============================================
 
-async def _provision_user(db: AsyncSession, payload: dict, username: str) -> Optional[int]:
+async def _provision_user(db: AsyncSession, payload: dict, username: str) -> int | None:
     """按 token 声明在 LG 用户表自动建号（SSO 建号；撞号时降级改名重试一次）"""
     from app.models.user import UserRole, UserStatus
 
@@ -90,7 +89,7 @@ async def _provision_user(db: AsyncSession, payload: dict, username: str) -> Opt
     return None
 
 
-async def _resolve_user_id(db: AsyncSession, payload: dict) -> Optional[int]:
+async def _resolve_user_id(db: AsyncSession, payload: dict) -> int | None:
     """
     跨后端身份映射：优先按 username 认人——AG/LG 用户库独立、id 会撞号
     （实证 AG qi.yunhe id=2 = LG e2emt319947），禁止拿裸 id 直接当外键；
@@ -118,7 +117,7 @@ async def _resolve_user_id(db: AsyncSession, payload: dict) -> Optional[int]:
 
 
 async def get_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict:
     """
@@ -165,9 +164,9 @@ async def get_current_user(
 
 
 async def get_current_user_optional(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db_session),
-) -> Optional[dict]:
+) -> dict | None:
     """
     获取当前用户（可选）
 
@@ -206,4 +205,4 @@ async def get_current_admin_user(
 DBSession = Annotated[AsyncSession, Depends(get_db_session)]
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 CurrentAdminUser = Annotated[dict, Depends(get_current_admin_user)]
-OptionalCurrentUser = Annotated[Optional[dict], Depends(get_current_user_optional)]
+OptionalCurrentUser = Annotated[dict | None, Depends(get_current_user_optional)]

@@ -15,9 +15,9 @@
 语义三值由 SKILL.md frontmatter `op_semantics` 声明，未声明一律按"不可重放"处理。
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
-from sqlalchemy import Index, JSON, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, IDMixin, TimestampMixin
@@ -37,7 +37,7 @@ class ActionJournal(Base, IDMixin, TimestampMixin):
     )
 
     # 任务 ID（可空：调用方可能没有 task 上下文）
-    task_id: Mapped[Optional[str]] = mapped_column(
+    task_id: Mapped[str | None] = mapped_column(
         String(128),
         nullable=True,
         index=True,
@@ -45,7 +45,7 @@ class ActionJournal(Base, IDMixin, TimestampMixin):
     )
 
     # 待办 ID（字符串，与 todos[].id 一致；可空）
-    todo_id: Mapped[Optional[str]] = mapped_column(
+    todo_id: Mapped[str | None] = mapped_column(
         String(64),
         nullable=True,
         comment="待办ID",
@@ -75,7 +75,7 @@ class ActionJournal(Base, IDMixin, TimestampMixin):
     )
 
     # 原始参数（审计 + 复现）
-    params: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+    params: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
         comment="原始参数",
@@ -91,14 +91,14 @@ class ActionJournal(Base, IDMixin, TimestampMixin):
     )
 
     # 成功时的结果快照（重放时直接返回）
-    result: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+    result: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
         comment="结果快照",
     )
 
     # 失败原因
-    error: Mapped[Optional[str]] = mapped_column(
+    error: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="错误信息",

@@ -1,11 +1,10 @@
 """Search Files Skill - 任务目录内代码搜索（先搜后读，替代整读/列目录漫游）"""
 
-import os
-import re
 import fnmatch
 import logging
+import os
+import re
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from app.agent.skills.core.base_skill import BaseSkill, SkillResult
 
@@ -58,7 +57,7 @@ class SearchFilesSkill(BaseSkill):
 
     # ---------- 路径解析与安全（与 file_operations read 同规则） ----------
 
-    def _resolve_base(self, path: str, project_root: Optional[str]) -> Optional[Path]:
+    def _resolve_base(self, path: str, project_root: str | None) -> Path | None:
         """解析搜索起始目录；必须落在任务目录内，否则返回 None"""
         try:
             tasks_dir = _get_tasks_dir()
@@ -81,7 +80,7 @@ class SearchFilesSkill(BaseSkill):
     def _skip_dir(name: str) -> bool:
         return name.startswith(".") or name in {"__pycache__", "node_modules", ".git"}
 
-    def _collect_files(self, base: Path, file_glob: Optional[str]):
+    def _collect_files(self, base: Path, file_glob: str | None):
         """收集待搜文件（跳过隐藏/缓存目录、二进制、超大文件）
         返回 ([(relpath, Path), ...], overflow: bool)"""
         result = []
@@ -191,7 +190,7 @@ class SearchFilesSkill(BaseSkill):
 
     def _search_files(self, base: Path, pattern: str, offset: int, limit: int) -> SkillResult:
         files, overflow = self._collect_files(base, None)
-        hits: List[str] = []
+        hits: list[str] = []
         total = 0
         for rel, fp in files:
             if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(fp.name, pattern):
@@ -212,12 +211,12 @@ class SearchFilesSkill(BaseSkill):
 
     # ---------- target=content：正则搜内容 ----------
 
-    def _search_content(self, base: Path, pattern: str, file_glob: Optional[str],
+    def _search_content(self, base: Path, pattern: str, file_glob: str | None,
                         output_mode: str, offset: int, limit: int) -> SkillResult:
         rx = re.compile(pattern)
         files, overflow = self._collect_files(base, file_glob)
-        per_file: Dict[str, int] = {}
-        detail: List[str] = []
+        per_file: dict[str, int] = {}
+        detail: list[str] = []
         total = 0
         files_hit = 0
 

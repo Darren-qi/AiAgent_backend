@@ -1,11 +1,12 @@
 """Middleware: Rate limit middleware."""
 
+import time
+from collections import defaultdict
+from collections.abc import Callable
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from typing import Dict, Callable
-import time
-from collections import defaultdict
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -20,8 +21,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.requests_per_minute = requests_per_minute
         self.requests_per_hour = requests_per_hour
-        self.window_minute: Dict[str, list] = defaultdict(list)
-        self.window_hour: Dict[str, list] = defaultdict(list)
+        self.window_minute: dict[str, list] = defaultdict(list)
+        self.window_hour: dict[str, list] = defaultdict(list)
 
     def _clean_old_requests(self, client_ip: str) -> None:
         """清理过期的请求记录"""

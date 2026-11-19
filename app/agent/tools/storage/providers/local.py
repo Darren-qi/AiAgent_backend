@@ -1,14 +1,17 @@
 """本地存储"""
 
+import builtins
+import logging
 import os
 import time
 import uuid
-import aiofiles
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Any
+
+import aiofiles
+
 from app.agent.tools.storage.providers.base import BaseStorageProvider
 
-import logging
 logger = logging.getLogger(__name__)
 
 
@@ -89,7 +92,7 @@ class LocalStorageProvider(BaseStorageProvider):
         except ValueError:
             return True
 
-    def init_task_path(self, project_name: Optional[str] = None) -> str:
+    def init_task_path(self, project_name: str | None = None) -> str:
         """
         为新会话/任务初始化存储路径
 
@@ -134,10 +137,10 @@ class LocalStorageProvider(BaseStorageProvider):
         self,
         file_data: bytes,
         filename: str,
-        content_type: Optional[str] = None,
+        content_type: str | None = None,
         folder: str = "",
-        project_name: Optional[str] = None
-    ) -> Dict[str, Any]:
+        project_name: str | None = None
+    ) -> dict[str, Any]:
         """上传文件到本地"""
         try:
             if project_name and not folder:
@@ -174,7 +177,7 @@ class LocalStorageProvider(BaseStorageProvider):
         content: str,
         filename: str,
         folder: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """直接写入文本文件内容（供 code_generator 等调用）
 
         Args:
@@ -207,7 +210,7 @@ class LocalStorageProvider(BaseStorageProvider):
             logger.error(f"[LocalStorage] 写入失败: {e}")
             return {"success": False, "error": str(e)}
 
-    async def download(self, key: str) -> Optional[bytes]:
+    async def download(self, key: str) -> bytes | None:
         """下载文件"""
         try:
             file_path = self.base_path / key
@@ -229,7 +232,7 @@ class LocalStorageProvider(BaseStorageProvider):
         except Exception:
             return False
 
-    async def get_url(self, key: str, expires: int = 3600) -> Optional[str]:
+    async def get_url(self, key: str, expires: int = 3600) -> str | None:
         """获取访问 URL"""
         return f"/storage/{key}"
 
@@ -252,7 +255,7 @@ class LocalStorageProvider(BaseStorageProvider):
         except Exception:
             return []
 
-    async def build_file_tree(self, folder_name: str) -> List[Dict[str, Any]]:
+    async def build_file_tree(self, folder_name: str) -> builtins.list[dict[str, Any]]:
         """构建指定任务目录的文件树结构
 
         Args:
@@ -267,7 +270,7 @@ class LocalStorageProvider(BaseStorageProvider):
 
         return self._build_tree_recursive(folder_path, folder_path)
 
-    def _build_tree_recursive(self, base: Path, current: Path) -> List[Dict[str, Any]]:
+    def _build_tree_recursive(self, base: Path, current: Path) -> builtins.list[dict[str, Any]]:
         """递归构建文件树"""
         result = []
         try:

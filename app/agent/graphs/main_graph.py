@@ -1,19 +1,21 @@
 """Agent 主图 - LangGraph 核心编排 (统一执行模式)"""
 
-import logging
 import json
+import logging
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Callable
+from typing import Any
 
+from app.agent.execution_state import ExecutionStateManager, TodoStatus
+from app.agent.graphs.dynamic_subgraph import DynamicSubgraph
+from app.agent.graphs.nodes.executor import Executor
+from app.agent.graphs.nodes.guard import Guard
+from app.agent.graphs.nodes.integrator import Integrator
 from app.agent.graphs.nodes.intent_detector import IntentDetector
 from app.agent.graphs.nodes.planner import Planner
-from app.agent.graphs.nodes.executor import Executor
-from app.agent.graphs.nodes.integrator import Integrator
-from app.agent.graphs.nodes.guard import Guard
 from app.agent.graphs.nodes.replanner import Replanner
-from app.agent.graphs.dynamic_subgraph import DynamicSubgraph
 from app.agent.graphs.supervisor_graph import SupervisorGraph
 from app.agent.state import (
     ExecutionContext,
@@ -21,14 +23,13 @@ from app.agent.state import (
     create_execution_context,
     default_loop_detector,
 )
-from app.agent.execution_state import ExecutionStateManager, TodoStatus
 from app.agent.task_executor import task_manager
 from app.models.execution_node import ExecutionNode
 
 logger = logging.getLogger(__name__)
 
 
-def build_plan_interception(plan_result: Dict[str, Any]) -> Optional[Dict[str, str]]:
+def build_plan_interception(plan_result: dict[str, Any]) -> dict[str, str] | None:
     """坏计划拦截判定（阶段一 · 快改1，2026-11-16）。
 
     planner 解析层已标记 params_invalid 的计划不进执行——返回结构化
@@ -46,13 +47,13 @@ def build_plan_interception(plan_result: Dict[str, Any]) -> Optional[Dict[str, s
     }
 
 
-def _walk_dir(base: Path, current: Path) -> List[Dict[str, Any]]:
+def _walk_dir(base: Path, current: Path) -> list[dict[str, Any]]:
     """按 {name, path, type, children} 递归列出任务目录（与前端文件树格式一致）。
 
     文件由 file_operations skill 写到 get_tasks_dir()/<project>，
     而 StorageManager 的本地根目录指向另一处 tasks，用它构建恒为空树。
     """
-    result: List[Dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
     try:
         for item in sorted(current.iterdir(), key=lambda x: (not x.is_dir(), x.name)):
             if item.name.startswith("."):
@@ -98,18 +99,18 @@ def _norm_rel(p: str) -> str:
 
 
 def _check_promised_files(
-    files_mentioned: Optional[List[str]],
-    params: Optional[Dict[str, Any]],
-    execution_result: Optional[Dict[str, Any]],
-    base_dir: Optional[Path],
-) -> List[str]:
+    files_mentioned: list[str] | None,
+    params: dict[str, Any] | None,
+    execution_result: dict[str, Any] | None,
+    base_dir: Path | None,
+) -> list[str]:
     """收集本待办过程中提到的文件，返回磁盘上不存在的那些（相对路径）。
 
     规则（用户 2026-11-09 要求）：过程中提到的文件必须出现在文件结构区；
     文件没生成 = 代码逻辑有问题，待办禁止标记完成，必须重试。
     提取用 LLM（observe 的"文件:"行），本函数只做确定性的存在性检查。
     """
-    candidates: List[str] = [str(f).strip() for f in (files_mentioned or []) if str(f).strip()]
+    candidates: list[str] = [str(f).strip() for f in (files_mentioned or []) if str(f).strip()]
     for key in ("path", "output_path"):
         v = (params or {}).get(key)
         if isinstance(v, str) and v.strip():
@@ -125,9 +126,9 @@ def _check_promised_files(
             if base_dir is None and Path(p).is_absolute():
                 base_dir = Path(p).parent
 
-    missing: List[str] = []
+    missing: list[str] = []
     seen = set()
-    _basenames: Optional[set] = None
+    _basenames: set | None = None
     for c in candidates:
         c = c.strip().strip('`"\'').replace("\\", "/")
         if not c or c in seen or re.match(r"^(https?|ftp)://", c, re.I):
@@ -175,16 +176,16 @@ class AgentState:
     """Agent 状态"""
     def __init__(
         self,
-        messages: Optional[List[Dict[str, Any]]] = None,
+        messages: list[dict[str, Any]] | None = None,
         task: str = "",
-        intent: Optional[str] = None,
-        intents: Optional[List[str]] = None,
-        plan: Optional[List[Dict[str, Any]]] = None,
+        intent: str | None = None,
+        intents: list[str] | None = None,
+        plan: list[dict[str, Any]] | None = None,
         current_step: int = 0,
-        results: Optional[List[Any]] = None,
-        error: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None,
-        routing: Optional[Dict[str, Any]] = None,
+        results: list[Any] | None = None,
+        error: str | None = None,
+        context: dict[str, Any] | None = None,
+        routing: dict[str, Any] | None = None,
         confidence: float = 0.0,
     ):
         self.messages = messages or []
@@ -199,7 +200,7 @@ class AgentState:
         self.routing = routing
         self.confidence = confidence
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "messages": self.messages,
             "task": self.task,
@@ -215,7 +216,7 @@ class AgentState:
         }
 
 
-from app.agent.roundcap_judge import cap_restore, cap_notice
+from app.agent.roundcap_judge import cap_notice, cap_restore
 
 
 def _stop_result(state, stop_reason: str) -> dict:
@@ -266,14 +267,14 @@ class AgentGraph:
         # 写后读回跳过状态（规则13硬约束，2026-11-13"避免反复读取"）：
         # 按会话记 {prev_op, last_write, read_files}，单例并发下不串会话；
         # turn 边界 _reset_readback_turn() 全清（跨 turn 上下文是摘要）
-        self._readback_guard: Dict[str, Dict[str, Any]] = {}
-        self._state_manager: Optional[ExecutionStateManager] = None  # 执行状态管理器
+        self._readback_guard: dict[str, dict[str, Any]] = {}
+        self._state_manager: ExecutionStateManager | None = None  # 执行状态管理器
         # 断点写失败上报通道（阶段八 P1）：ExecutionStateManager → SSE on_step。
         # 前端未订阅 checkpoint_error 事件时 emit 是 no-op，不影响现有 UI。
-        self._ckpt_on_step: Optional[Callable[[str, Dict[str, Any]], None]] = None
+        self._ckpt_on_step: Callable[[str, dict[str, Any]], None] | None = None
         self._ckpt_fail_count: int = 0
 
-    def _reset_readback_turn(self, session_id: Optional[str] = None) -> None:
+    def _reset_readback_turn(self, session_id: str | None = None) -> None:
         """新对话轮开始：清空该会话的读回守卫状态。
 
         跨 turn 的上下文是摘要（不是全文），上一 turn 读过/写过的文件在
@@ -334,7 +335,7 @@ class AgentGraph:
             # 阶段八 P1：断点写失败不再只写日志，转成 checkpoint_error 事件
             self._state_manager.on_checkpoint_error = self._report_checkpoint_error
 
-    def _report_checkpoint_error(self, reason: str, info: Optional[Dict[str, Any]] = None) -> None:
+    def _report_checkpoint_error(self, reason: str, info: dict[str, Any] | None = None) -> None:
         """断点写失败上报（阶段八 P1）。
 
         save_state 失败=断点没落库，下次恢复会回到更早进度；以前只有日志，
@@ -357,9 +358,9 @@ class AgentGraph:
 
     def _extract_files_from_result(
         self,
-        step: Dict[str, Any],
-        result: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+        step: dict[str, Any],
+        result: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         """从执行结果中提取生成的文件信息"""
         files = []
 
@@ -440,7 +441,7 @@ class AgentGraph:
         success: bool = True,
         iteration: int = 0,
         meta_data: dict = None,
-    ) -> Optional[ExecutionNode]:
+    ) -> ExecutionNode | None:
         """
         保存执行节点到数据库（异步）
 
@@ -473,8 +474,9 @@ class AgentGraph:
 
             # 如果有 session_id，先确保 sessions 表中有对应记录
             if self._session_id:
-                from app.models.experience import SessionModel
                 from sqlalchemy import select
+
+                from app.models.experience import SessionModel
                 # 检查是否已存在
                 session_check = await db.execute(
                     select(SessionModel).where(SessionModel.session_id == self._session_id)
@@ -495,8 +497,9 @@ class AgentGraph:
 
             # 如果有 task_id，先确保 tasks 表中有对应记录
             if self._task_id:
-                from app.models.experience import TaskModel
                 from sqlalchemy import select
+
+                from app.models.experience import TaskModel
                 # 检查是否已存在
                 task_check = await db.execute(
                     select(TaskModel).where(TaskModel.task_id == self._task_id)
@@ -540,7 +543,7 @@ class AgentGraph:
             # 不抛出异常，避免阻塞主流程
             return None
 
-    def _format_step_observation(self, action: str, result: Dict[str, Any], files: List[Dict[str, Any]]) -> str:
+    def _format_step_observation(self, action: str, result: dict[str, Any], files: list[dict[str, Any]]) -> str:
         """生成人类可读的步骤观察消息"""
         success = result.get("success", True)
         error = result.get("error")
@@ -579,11 +582,11 @@ class AgentGraph:
     async def execute(
         self,
         task: str,
-        context: Optional[Dict[str, Any]] = None,
-        session_id: Optional[str] = None,
-        task_id: Optional[str] = None,
-        on_step: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> Dict[str, Any]:
+        context: dict[str, Any] | None = None,
+        session_id: str | None = None,
+        task_id: str | None = None,
+        on_step: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         """
         执行任务的主入口
 
@@ -634,7 +637,7 @@ class AgentGraph:
         # factory 侧每次 LLM 调用按此 scope 累计真实 prompt/completion/cost，
         # key 与 set_usage_scope 一致（task_id 可能为 None → 回落 session_id）。
         try:
-            from app.agent.llm.factory import set_usage_scope, reset_task_usage
+            from app.agent.llm.factory import reset_task_usage, set_usage_scope
             _usage_key = task_id or session_id or "global"
             set_usage_scope(_usage_key)
             reset_task_usage(_usage_key)
@@ -909,9 +912,9 @@ class AgentGraph:
                 # turn 收尾：推送压缩后的实时用量 + 持久化到会话 KV（刷新可恢复）
                 try:
                     import asyncio as _aio
+
+                    from app.agent.llm.factory import get_last_usage, get_task_usage
                     from app.agent.tools.session_context import set_session_context
-                    from app.agent.llm.factory import (
-                        get_task_usage, get_last_usage)
                     _max = self._ctx_mgr.cfg.max_tokens
                     _tu = get_task_usage()
                     # 11-13：报本轮真实峰值（接续 floor），不再用重建片段 budget.used。
@@ -982,7 +985,7 @@ class AgentGraph:
         self,
         state: AgentState,
         context: ExecutionContext,
-        on_step: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        on_step: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> AgentState:
         """
         统一执行引擎
@@ -1158,6 +1161,7 @@ class AgentGraph:
         # 只尽力补齐、不单独判失败（避免核对误报导致任务假失败）。
         try:
             import os as _os
+
             from app.agent.skills.file_operations.skill import get_tasks_dir as _gtd
             _task_dir = getattr(context, "task_path", None)
             _promised = [str(f).strip() for f in (state.context.get("_promised_files") or []) if str(f).strip()]
@@ -1253,13 +1257,13 @@ class AgentGraph:
     async def _execute_todo_with_loop(
         self,
         state: AgentState,
-        todo: Dict[str, Any],
+        todo: dict[str, Any],
         context: str,
         context_obj: ExecutionContext,
         iteration: int,
-        on_step: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        on_step: Callable[[str, dict[str, Any]], None] | None = None,
         is_repair: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         对单个待办执行 Thought-Planning-Observation 循环
 
@@ -1433,8 +1437,7 @@ class AgentGraph:
                         if on_step:
                             try:
                                 from app.agent.context import count_tokens as _ctok
-                                from app.agent.llm.factory import (
-                                    get_task_usage, get_last_usage)
+                                from app.agent.llm.factory import get_last_usage, get_task_usage
                                 _max_u = self._ctx_mgr.cfg.max_tokens
                                 # 本步完整上下文 token（系统提示词在 Planner 内部拼）
                                 _est_u = _ctok(thought_context)
@@ -1887,7 +1890,7 @@ class AgentGraph:
                         logger.debug(f"[AgentGraph] 保存 task_path 失败: {e}")
                     # 推送 project_tree 事件，让前端显示文件结构
                     if on_step:
-                        file_tree: List[Dict[str, Any]] = []
+                        file_tree: list[dict[str, Any]] = []
                         try:
                             from app.agent.skills.file_operations.skill import get_tasks_dir
                             _base = get_tasks_dir() / returned_project
@@ -1960,7 +1963,7 @@ class AgentGraph:
             "action": action,
         }
 
-    async def _ensure_session_task_dir(self, context_obj) -> Optional[str]:
+    async def _ensure_session_task_dir(self, context_obj) -> str | None:
         """锚定/创建会话任务目录，返回 task_path（失败/无会话返回 None）。
 
         2026-11-13 任务86根因：新会话 task_path 为空时，file_operations 的
@@ -1976,7 +1979,7 @@ class AgentGraph:
         if not self._session_id:
             return None
         # 内存优先（落盘后先写这里），再回落 DB
-        existing: Optional[str] = None
+        existing: str | None = None
         try:
             from app.api.v1.endpoints.agent import session_task_paths
             existing = session_task_paths.get(self._session_id)
@@ -2005,7 +2008,7 @@ class AgentGraph:
             logger.debug(f"[AgentGraph] 持久化 task_path 失败: {e}")
         return name
 
-    async def _ensure_task_path(self, params: Dict[str, Any], action: str) -> Dict[str, Any]:
+    async def _ensure_task_path(self, params: dict[str, Any], action: str) -> dict[str, Any]:
         """确保写文件类 action 始终用**同一个**任务目录（目录中途变换的根因）。
 
         规则：
@@ -2025,7 +2028,7 @@ class AgentGraph:
         if action not in task_path_actions:
             return params
 
-        existing: Optional[str] = None
+        existing: str | None = None
         if self._session_id:
             try:
                 # 内存优先（file_operations/code_generator 落盘后先写这里），
@@ -2055,7 +2058,7 @@ class AgentGraph:
                     params[_k] = _nv
         return params
 
-    async def _get_session_task_path(self) -> Optional[str]:
+    async def _get_session_task_path(self) -> str | None:
         """从数据库读取 session 的 task_path"""
         if not self._session_id:
             return None
@@ -2069,11 +2072,11 @@ class AgentGraph:
 
     async def _execute_with_timeout(
         self,
-        step: Dict[str, Any],
+        step: dict[str, Any],
         context: ExecutionContext,
         timeout: int,
-        task_path: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        task_path: str | None = None,
+    ) -> dict[str, Any]:
         """带超时的步骤执行"""
         import asyncio
 
@@ -2104,7 +2107,7 @@ class AgentGraph:
                 "step": step.get("step"),
             }
 
-    async def _execute_single_step(self, step: Dict[str, Any], task_path: Optional[str] = None, session_id: Optional[str] = None) -> Dict[str, Any]:
+    async def _execute_single_step(self, step: dict[str, Any], task_path: str | None = None, session_id: str | None = None) -> dict[str, Any]:
         """执行单个步骤"""
         action = step.get("action", "unknown")
         params = step.get("params", {}).copy()
@@ -2274,7 +2277,7 @@ class AgentGraph:
             logger.exception(f"[AgentGraph] 规划异常")
         return state
 
-    def _all_steps_succeeded(self, results: List[Dict[str, Any]]) -> bool:
+    def _all_steps_succeeded(self, results: list[dict[str, Any]]) -> bool:
         """检查是否所有步骤都成功"""
         if not results:
             return False
@@ -2314,7 +2317,7 @@ class AgentGraph:
             logger.exception(f"[AgentGraph] 整合结果异常")
         return state
 
-    def _format_response(self, state: AgentState, context: Optional[ExecutionContext] = None) -> Dict[str, Any]:
+    def _format_response(self, state: AgentState, context: ExecutionContext | None = None) -> dict[str, Any]:
         """格式化响应"""
         final_message = None
         for msg in reversed(state.messages):
@@ -2348,7 +2351,7 @@ class AgentGraph:
 
         return response
 
-    def _format_error(self, error: str, state: AgentState) -> Dict[str, Any]:
+    def _format_error(self, error: str, state: AgentState) -> dict[str, Any]:
         """格式化错误响应"""
         return {
             "success": False,
@@ -2362,7 +2365,7 @@ class AgentGraph:
             "routing_mode": "unified",
         }
 
-    def _format_cancelled_result(self, state: AgentState) -> Dict[str, Any]:
+    def _format_cancelled_result(self, state: AgentState) -> dict[str, Any]:
         """格式化取消响应"""
         return {
             "success": False,

@@ -1,13 +1,13 @@
 """多智能体协调器"""
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Any
 
-from app.agent.agents.planner_agent import PlannerAgent
-from app.agent.agents.executor_agent import ExecutorAgent
-from app.agent.agents.critic_agent import CriticAgent
-from app.agent.agents.supervisor_agent import SupervisorAgent
 from app.agent.agents.base import AgentResult
+from app.agent.agents.critic_agent import CriticAgent
+from app.agent.agents.executor_agent import ExecutorAgent
+from app.agent.agents.planner_agent import PlannerAgent
+from app.agent.agents.supervisor_agent import SupervisorAgent
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class MultiAgentCoordinator:
     async def execute(
         self,
         task: str,
-        context: Optional[Dict[str, Any]] = None
+        context: dict[str, Any] | None = None
     ) -> AgentResult:
         """
         执行多智能体协作
@@ -138,7 +138,7 @@ class MultiAgentCoordinator:
             metadata={"iteration": iteration, "final_results": executor_result.data if executor_result.success else None}
         )
 
-    def _should_parallel(self, subtasks: List[Dict[str, Any]]) -> bool:
+    def _should_parallel(self, subtasks: list[dict[str, Any]]) -> bool:
         """判断是否应该并行执行"""
         if len(subtasks) < 2:
             return False
@@ -151,7 +151,7 @@ class MultiAgentCoordinator:
         self,
         agent_type: str,
         input_data: Any,
-        context: Optional[Dict[str, Any]] = None
+        context: dict[str, Any] | None = None
     ) -> AgentResult:
         """单独执行某个 Agent"""
         agent_map = {

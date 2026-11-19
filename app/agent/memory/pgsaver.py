@@ -6,7 +6,7 @@ PostgreSQL 记忆持久化模块
 """
 
 import logging
-from typing import Any, Dict, List, Optional, TypeVar
+from typing import Any, TypeVar
 from uuid import uuid4
 
 from sqlalchemy import delete, func, select, update
@@ -44,7 +44,7 @@ class PostgresSaver:
         session_id: str,
         role: str,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> int:
         """保存对话消息，返回消息ID"""
         seq_result = await self._session.execute(
@@ -72,9 +72,9 @@ class PostgresSaver:
     async def get_messages(
         self,
         session_id: str,
-        limit: Optional[int] = None,
+        limit: int | None = None,
         offset: int = 0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """获取对话消息列表"""
         query = (
             select(ConversationMessage)
@@ -104,7 +104,7 @@ class PostgresSaver:
         self,
         session_id: str,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """获取最近的 N 条消息"""
         messages = await self.get_messages(session_id, limit=limit)
         return messages[-limit:] if messages else []
@@ -144,7 +144,7 @@ class PostgresSaver:
         self,
         session_id: str,
         fact_key: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """获取单个语义事实"""
         result = await self._session.execute(
             select(SemanticFact).where(
@@ -157,7 +157,7 @@ class PostgresSaver:
             return {"key": fact.fact_key, "value": fact.fact_value}
         return None
 
-    async def get_all_facts(self, session_id: str) -> Dict[str, Any]:
+    async def get_all_facts(self, session_id: str) -> dict[str, Any]:
         """获取会话的所有语义事实"""
         result = await self._session.execute(
             select(SemanticFact).where(SemanticFact.session_id == session_id)
@@ -187,9 +187,9 @@ class PostgresSaver:
     async def save_episode(
         self,
         session_id: str,
-        episode_id: Optional[str] = None,
-        event_data: Optional[Any] = None,
-        summary: Optional[str] = None,
+        episode_id: str | None = None,
+        event_data: Any | None = None,
+        summary: str | None = None,
     ) -> int:
         """保存情景事件"""
         if episode_id is None:
@@ -205,7 +205,7 @@ class PostgresSaver:
         await self._session.commit()
         return episode.id
 
-    async def get_episode(self, episode_id: str) -> Optional[Dict[str, Any]]:
+    async def get_episode(self, episode_id: str) -> dict[str, Any] | None:
         """根据 ID 获取单个情景事件"""
         result = await self._session.execute(
             select(EpisodicEvent).where(EpisodicEvent.episode_id == episode_id)
@@ -224,7 +224,7 @@ class PostgresSaver:
         self,
         session_id: str,
         limit: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """获取最近的 N 个情景事件"""
         result = await self._session.execute(
             select(EpisodicEvent)
@@ -256,7 +256,7 @@ class PostgresSaver:
         session_id: str,
         memory_key: str,
         memory_value: Any,
-        expected_version: Optional[int] = None,
+        expected_version: int | None = None,
     ) -> int:
         """保存或更新工作记忆
 
@@ -342,7 +342,7 @@ class PostgresSaver:
         self,
         session_id: str,
         memory_key: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """获取单个工作记忆"""
         result = await self._session.execute(
             select(WorkingMemory).where(
@@ -356,7 +356,7 @@ class PostgresSaver:
             return {"key": memory.memory_key, "value": memory.memory_value}
         return None
 
-    async def get_all_working(self, session_id: str) -> Dict[str, Any]:
+    async def get_all_working(self, session_id: str) -> dict[str, Any]:
         """获取会话的所有工作记忆"""
         result = await self._session.execute(
             select(WorkingMemory).where(
@@ -396,7 +396,7 @@ class PostgresSaver:
     async def save_session_context(
         self,
         session_id: str,
-        context_data: Dict[str, Any],
+        context_data: dict[str, Any],
     ) -> None:
         """批量保存会话上下文（消息、事实、事件、工作记忆）"""
         if "messages" in context_data:
@@ -429,7 +429,7 @@ class PostgresSaver:
 
         await self._session.commit()
 
-    async def load_session_context(self, session_id: str) -> Dict[str, Any]:
+    async def load_session_context(self, session_id: str) -> dict[str, Any]:
         """加载会话完整上下文"""
         messages = await self.get_messages(session_id)
         facts = await self.get_all_facts(session_id)

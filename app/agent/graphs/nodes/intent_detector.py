@@ -6,11 +6,11 @@
 
 import json
 import logging
-from typing import Dict, Any, List, Optional
 import re as regex_module
+from typing import Any
 
-from app.agent.llm.factory import LLMFactory
 from app.agent.graphs.nodes.llm_chat_mixin import LLMChatMixin
+from app.agent.llm.factory import LLMFactory
 
 logger = logging.getLogger(__name__)
 
@@ -93,11 +93,11 @@ class IntentDetector(LLMChatMixin):
 请分析以下用户任务："""
 
     def __init__(self):
-        self._llm_factory: Optional[LLMFactory] = None
+        self._llm_factory: LLMFactory | None = None
         self._keyword_fallback = KeywordIntentDetector()
         self._use_llm = True
         self._llm_fallback_threshold = 0.5  # LLM置信度低于此值时使用关键词
-        self._task_id: Optional[str] = None
+        self._task_id: str | None = None
 
     def set_task_id(self, task_id: str) -> None:
         """设置任务 ID，用于可取消的 LLM 调用"""
@@ -110,7 +110,7 @@ class IntentDetector(LLMChatMixin):
             self._llm_factory = LLMFactory.get_instance()
         return self._llm_factory
 
-    async def detect(self, task: str) -> Dict[str, Any]:
+    async def detect(self, task: str) -> dict[str, Any]:
         """
         检测用户意图
 
@@ -130,7 +130,7 @@ class IntentDetector(LLMChatMixin):
         # 2. 降级到关键词匹配
         return await self._keyword_fallback.detect(task)
 
-    async def _detect_with_llm(self, task: str) -> Dict[str, Any]:
+    async def _detect_with_llm(self, task: str) -> dict[str, Any]:
         """使用 LLM 进行意图识别"""
         response = await self._llm_chat(
             messages=[
@@ -170,7 +170,7 @@ class IntentDetector(LLMChatMixin):
         # 解析失败，尝试从文本推断
         return self._parse_intent_from_text(task, content)
 
-    def _normalize_intent_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_intent_result(self, result: dict[str, Any]) -> dict[str, Any]:
         """标准化意图识别结果"""
         primary = result.get("primary_intent", "general")
         all_intents = result.get("all_intents", [primary])
@@ -192,7 +192,7 @@ class IntentDetector(LLMChatMixin):
             "suggested_actions": result.get("suggested_actions", []),
         }
 
-    def _parse_intent_from_text(self, task: str, text: str) -> Dict[str, Any]:
+    def _parse_intent_from_text(self, task: str, text: str) -> dict[str, Any]:
         """从文本中解析意图（当 JSON 解析失败时）"""
         text_lower = text.lower()
 
@@ -216,7 +216,7 @@ class IntentDetector(LLMChatMixin):
             "suggested_actions": [],
         }
 
-    async def detect_complexity(self, task: str, intents: List[str]) -> Dict[str, Any]:
+    async def detect_complexity(self, task: str, intents: list[str]) -> dict[str, Any]:
         """
         评估任务复杂度并决定路由策略
 
@@ -234,7 +234,7 @@ class IntentDetector(LLMChatMixin):
 
         return self._get_unified_routing_config()
 
-    def _get_unified_routing_config(self) -> Dict[str, Any]:
+    def _get_unified_routing_config(self) -> dict[str, Any]:
         """
         获取统一的路由配置
 
@@ -261,7 +261,7 @@ class IntentDetector(LLMChatMixin):
             "use_heuristic": False,
         }
 
-    def _heuristic_complexity(self, task: str, intents: List[str]) -> Dict[str, Any]:
+    def _heuristic_complexity(self, task: str, intents: list[str]) -> dict[str, Any]:
         """
         保留向后兼容的启发式复杂度评估
 
@@ -270,7 +270,7 @@ class IntentDetector(LLMChatMixin):
         """
         return self._get_unified_routing_config()
 
-    async def _evaluate_complexity_with_llm(self, task: str, intents: List[str]) -> Dict[str, Any]:
+    async def _evaluate_complexity_with_llm(self, task: str, intents: list[str]) -> dict[str, Any]:
         """
         保留向后兼容的 LLM 复杂度评估
 
@@ -279,7 +279,7 @@ class IntentDetector(LLMChatMixin):
         logger.info("[IntentDetector] LLM复杂度评估已弃用，使用统一配置")
         return self._get_unified_routing_config()
 
-    def _normalize_complexity_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_complexity_result(self, result: dict[str, Any]) -> dict[str, Any]:
         """
         保留向后兼容的结果标准化
 
@@ -291,7 +291,7 @@ class IntentDetector(LLMChatMixin):
 class KeywordIntentDetector:
     """基于关键词的意图检测器（兜底方案）"""
 
-    async def detect(self, task: str) -> Dict[str, Any]:
+    async def detect(self, task: str) -> dict[str, Any]:
         """使用关键词匹配检测意图"""
         task_lower = task.lower()
 

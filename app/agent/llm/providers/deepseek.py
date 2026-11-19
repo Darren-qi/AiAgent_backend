@@ -2,7 +2,8 @@
 
 import os
 import time
-from typing import AsyncIterator, Dict, Any
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 from openai import AsyncOpenAI
@@ -27,7 +28,7 @@ class DeepSeekProvider(BaseLLMProvider):
         self.base_url = base_url
         self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         # 用户级 key 专属 client 缓存（2026-11-14）：key → 复用连接池的 client
-        self._keyed_clients: Dict[str, AsyncOpenAI] = {}
+        self._keyed_clients: dict[str, AsyncOpenAI] = {}
 
     def _client_for(self, api_key: str) -> AsyncOpenAI:
         """按用户 key 取（或建）专属 client，进程内按 key 复用。"""
@@ -48,7 +49,7 @@ class DeepSeekProvider(BaseLLMProvider):
 
         messages = [{"role": m.role, "content": m.content} for m in request.messages]
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self.config.name,
             "messages": messages,
             "temperature": request.temperature,
@@ -91,7 +92,7 @@ class DeepSeekProvider(BaseLLMProvider):
         """流式聊天请求"""
         messages = [{"role": m.role, "content": m.content} for m in request.messages]
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self.config.name,
             "messages": messages,
             "temperature": request.temperature,

@@ -9,8 +9,8 @@ from app.agent.skills.core.base_skill import BaseSkill, SkillResult
 from app.agent.skills.core.progressive_loader import (
     ProgressiveSkillLoader,
     SkillMetadata,
-    get_loader,
     bootstrap,
+    get_loader,
 )
 
 __all__ = [

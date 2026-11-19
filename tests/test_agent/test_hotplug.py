@@ -11,6 +11,7 @@ import os
 
 import pytest
 
+from app.agent.skills.core.base_skill import SkillResult
 from app.agent.skills.core.progressive_loader import (
     ProgressiveSkillLoader,
     disable_skill,
@@ -18,7 +19,6 @@ from app.agent.skills.core.progressive_loader import (
     get_loader,
     register_skill_executor,
 )
-from app.agent.skills.core.base_skill import SkillResult
 from app.agent.skills.guard import tool_guard
 
 

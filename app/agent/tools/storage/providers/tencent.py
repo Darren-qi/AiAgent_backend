@@ -1,7 +1,9 @@
 """腾讯云 COS 存储"""
 
+import builtins
 import os
-from typing import Optional, Dict, Any, List
+from typing import Any
+
 from app.agent.tools.storage.providers.base import BaseStorageProvider
 
 
@@ -21,9 +23,9 @@ class TencentCOSProvider(BaseStorageProvider):
         self,
         file_data: bytes,
         filename: str,
-        content_type: Optional[str] = None,
+        content_type: str | None = None,
         folder: str = ""
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """上传文件到腾讯云 COS"""
         if not self.enabled:
             return {"success": False, "error": "腾讯云 COS 未配置"}
@@ -55,7 +57,7 @@ class TencentCOSProvider(BaseStorageProvider):
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    async def download(self, key: str) -> Optional[bytes]:
+    async def download(self, key: str) -> bytes | None:
         """下载文件"""
         if not self.enabled:
             return None
@@ -67,7 +69,7 @@ class TencentCOSProvider(BaseStorageProvider):
             return False
         return True
 
-    async def get_url(self, key: str, expires: int = 3600) -> Optional[str]:
+    async def get_url(self, key: str, expires: int = 3600) -> str | None:
         """获取访问 URL"""
         return f"https://{self.bucket}.cos.{self.region}.myqcloud.com/{key}"
 
@@ -75,10 +77,10 @@ class TencentCOSProvider(BaseStorageProvider):
         """列出文件"""
         return []
 
-    async def write_file(self, content: str, filename: str, folder: str) -> Dict[str, Any]:
+    async def write_file(self, content: str, filename: str, folder: str) -> dict[str, Any]:
         """写入文本文件（云存储不支持直接写入，返回错误）"""
         return {"success": False, "error": "云存储不支持直接写入，请使用 upload 方法"}
 
-    async def build_file_tree(self, folder_name: str) -> List[Dict[str, Any]]:
+    async def build_file_tree(self, folder_name: str) -> builtins.list[dict[str, Any]]:
         """构建文件树（云存储暂不支持）"""
         return []

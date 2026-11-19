@@ -8,9 +8,10 @@
     - execution_nodes: 执行节点表
 """
 
-from typing import Optional
-from sqlalchemy import String, Text, Integer, Boolean, ForeignKey, JSON
+
+from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
+
 from app.db.base import Base, IDMixin, TimestampMixin
 
 
@@ -65,7 +66,7 @@ class ExecutionNode(Base, IDMixin, TimestampMixin):
     )
 
     # 任务 ID（可空，流式执行时 TaskModel 可能尚未创建）
-    task_id: Mapped[Optional[str]] = mapped_column(
+    task_id: Mapped[str | None] = mapped_column(
         String(100),
         ForeignKey("tasks.task_id", ondelete="CASCADE"),
         nullable=True,
@@ -105,21 +106,21 @@ class ExecutionNode(Base, IDMixin, TimestampMixin):
     )
 
     # 执行动作 (仅 next_moves 类型)
-    action: Mapped[Optional[str]] = mapped_column(
+    action: Mapped[str | None] = mapped_column(
         String(50),
         nullable=True,
         comment="执行动作",
     )
 
     # 执行参数 (JSON, 仅 next_moves 类型)
-    params: Mapped[Optional[dict]] = mapped_column(
+    params: Mapped[dict | None] = mapped_column(
         JSON,
         nullable=True,
         comment="执行参数",
     )
 
     # 执行结果 (JSON)
-    result: Mapped[Optional[dict]] = mapped_column(
+    result: Mapped[dict | None] = mapped_column(
         JSON,
         nullable=True,
         comment="执行结果",
@@ -142,7 +143,7 @@ class ExecutionNode(Base, IDMixin, TimestampMixin):
     )
 
     # 额外数据 (JSON)
-    meta_data: Mapped[Optional[dict]] = mapped_column(
+    meta_data: Mapped[dict | None] = mapped_column(
         JSON,
         nullable=True,
         comment="元数据",

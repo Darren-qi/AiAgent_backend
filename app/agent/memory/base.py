@@ -1,7 +1,7 @@
 """记忆基类"""
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Any
 
 
 class BaseMemory(ABC):
@@ -13,7 +13,7 @@ class BaseMemory(ABC):
         pass
 
     @abstractmethod
-    async def get(self, key: str) -> Optional[Any]:
+    async def get(self, key: str) -> Any | None:
         """获取记忆"""
         pass
 
@@ -28,6 +28,6 @@ class BaseMemory(ABC):
         pass
 
     @abstractmethod
-    async def get_all(self) -> Dict[str, Any]:
+    async def get_all(self) -> dict[str, Any]:
         """获取所有记忆"""
         pass

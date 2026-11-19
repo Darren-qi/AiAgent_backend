@@ -3,8 +3,8 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, List
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -12,8 +12,8 @@ class ToolResult:
     """工具执行结果"""
     success: bool
     data: Any = None
-    error: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    error: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class BaseTool(ABC):
@@ -22,7 +22,7 @@ class BaseTool(ABC):
     def __init__(self):
         self.name = self.__class__.__name__
         self.description = ""
-        self.parameters: List[Dict[str, Any]] = []
+        self.parameters: list[dict[str, Any]] = []
         self.enabled = True
 
     @abstractmethod
@@ -30,7 +30,7 @@ class BaseTool(ABC):
         """执行工具"""
         pass
 
-    def get_schema(self) -> Dict[str, Any]:
+    def get_schema(self) -> dict[str, Any]:
         """获取工具的 JSON Schema"""
         return {
             "name": self.name,
@@ -39,7 +39,7 @@ class BaseTool(ABC):
             "enabled": self.enabled,
         }
 
-    async def validate_params(self, params: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+    async def validate_params(self, params: dict[str, Any]) -> tuple[bool, str | None]:
         """验证参数"""
         required = [p["name"] for p in self.parameters if p.get("required", False)]
         for name in required:
@@ -56,7 +56,7 @@ class ToolMetadata:
         name: str,
         description: str,
         category: str = "general",
-        tags: Optional[List[str]] = None,
+        tags: list[str] | None = None,
         version: str = "1.0.0",
     ):
         self.name = name
@@ -65,7 +65,7 @@ class ToolMetadata:
         self.tags = tags or []
         self.version = version
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "description": self.description,

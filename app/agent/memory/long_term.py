@@ -1,6 +1,6 @@
 """长期记忆模块"""
 
-from typing import Any, Dict, Optional, List
+from typing import Any
 
 from app.agent.memory.base import BaseMemory
 from app.agent.memory.pgsaver import PostgresSaver
@@ -9,10 +9,10 @@ from app.agent.memory.pgsaver import PostgresSaver
 class SemanticMemory(BaseMemory):
     """语义记忆 - 存储结构性知识"""
 
-    def __init__(self, db_saver: Optional[PostgresSaver] = None):
-        self._facts: Dict[str, Any] = {}
+    def __init__(self, db_saver: PostgresSaver | None = None):
+        self._facts: dict[str, Any] = {}
         self.db_saver = db_saver
-        self._session_id: Optional[str] = None
+        self._session_id: str | None = None
 
     def set_session(self, session_id: str) -> None:
         """设置会话ID"""
@@ -29,7 +29,7 @@ class SemanticMemory(BaseMemory):
                 fact_value=value,
             )
 
-    async def get(self, key: str) -> Optional[Any]:
+    async def get(self, key: str) -> Any | None:
         """获取事实"""
         return self._facts.get(key)
 
@@ -48,11 +48,11 @@ class SemanticMemory(BaseMemory):
         """清空事实"""
         self._facts = {}
 
-    async def get_all(self) -> Dict[str, Any]:
+    async def get_all(self) -> dict[str, Any]:
         """获取所有事实"""
         return self._facts.copy()
 
-    async def search(self, query: str) -> List[Dict[str, Any]]:
+    async def search(self, query: str) -> list[dict[str, Any]]:
         """搜索相关事实"""
         results = []
         query_lower = query.lower()
@@ -70,12 +70,12 @@ class EpisodicMemory(BaseMemory):
     def __init__(
         self,
         max_episodes: int = 100,
-        db_saver: Optional[PostgresSaver] = None,
+        db_saver: PostgresSaver | None = None,
     ):
         self.max_episodes = max_episodes
         self.db_saver = db_saver
-        self._session_id: Optional[str] = None
-        self._episodes: List[Dict[str, Any]] = []
+        self._session_id: str | None = None
+        self._episodes: list[dict[str, Any]] = []
 
     def set_session(self, session_id: str) -> None:
         """设置会话ID"""
@@ -100,7 +100,7 @@ class EpisodicMemory(BaseMemory):
                 event_data=value,
             )
 
-    async def get(self, key: str) -> Optional[Any]:
+    async def get(self, key: str) -> Any | None:
         """获取事件"""
         for episode in self._episodes:
             if episode["id"] == key:
@@ -115,11 +115,11 @@ class EpisodicMemory(BaseMemory):
         """清空事件"""
         self._episodes = []
 
-    async def get_all(self) -> Dict[str, Any]:
+    async def get_all(self) -> dict[str, Any]:
         """获取所有事件"""
         return {e["id"]: e["event"] for e in self._episodes}
 
-    def get_recent(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_recent(self, limit: int = 10) -> list[dict[str, Any]]:
         """获取最近的事件"""
         return self._episodes[-limit:]
 
@@ -130,8 +130,8 @@ class LongTermMemory:
     def __init__(
         self,
         max_episodes: int = 100,
-        db_saver: Optional[PostgresSaver] = None,
-        session_id: Optional[str] = None,
+        db_saver: PostgresSaver | None = None,
+        session_id: str | None = None,
     ):
         self.semantic = SemanticMemory(db_saver=db_saver)
         self.episodic = EpisodicMemory(max_episodes=max_episodes, db_saver=db_saver)
@@ -147,11 +147,11 @@ class LongTermMemory:
         """添加事实"""
         await self.semantic.add(key, value)
 
-    async def get_fact(self, key: str) -> Optional[Any]:
+    async def get_fact(self, key: str) -> Any | None:
         """获取事实"""
         return await self.semantic.get(key)
 
-    async def search_facts(self, query: str) -> List[Dict[str, Any]]:
+    async def search_facts(self, query: str) -> list[dict[str, Any]]:
         """搜索事实"""
         return await self.semantic.search(query)
 
@@ -159,11 +159,11 @@ class LongTermMemory:
         """添加事件"""
         await self.episodic.add(key, event)
 
-    async def get_episode(self, key: str) -> Optional[Any]:
+    async def get_episode(self, key: str) -> Any | None:
         """获取事件"""
         return await self.episodic.get(key)
 
-    def get_recent_episodes(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_recent_episodes(self, limit: int = 10) -> list[dict[str, Any]]:
         """获取最近事件"""
         return self.episodic.get_recent(limit)
 

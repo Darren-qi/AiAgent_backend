@@ -1,9 +1,9 @@
 """邮件通知服务"""
 
-from typing import List, Dict, Any
 import smtplib
-from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from typing import Any
 
 
 class EmailNotifier:
@@ -27,11 +27,11 @@ class EmailNotifier:
 
     async def send(
         self,
-        to_addresses: List[str],
+        to_addresses: list[str],
         subject: str,
         content: str,
         content_type: str = "plain",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """发送邮件"""
         try:
             msg = MIMEMultipart()
@@ -56,20 +56,20 @@ class EmailNotifier:
 
     async def send_html(
         self,
-        to_addresses: List[str],
+        to_addresses: list[str],
         subject: str,
         html_content: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """发送 HTML 邮件"""
         return await self.send(to_addresses, subject, html_content, "html")
 
     async def send_template(
         self,
-        to_addresses: List[str],
+        to_addresses: list[str],
         subject: str,
         template: str,
-        variables: Dict[str, str],
-    ) -> Dict[str, Any]:
+        variables: dict[str, str],
+    ) -> dict[str, Any]:
         """使用模板发送邮件"""
         content = template
         for key, value in variables.items():

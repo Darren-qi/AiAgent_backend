@@ -1,14 +1,14 @@
 """质量优先策略"""
 
-from typing import List, Optional
-from app.agent.llm.types import ModelConfig
+
 from app.agent.llm.routers.base import BaseRouter
+from app.agent.llm.types import ModelConfig
 
 
 class QualityStrategy(BaseRouter):
     """质量优先策略 - 选择能力最强的模型"""
 
-    def select(self, available_models: List[ModelConfig]) -> Optional[ModelConfig]:
+    def select(self, available_models: list[ModelConfig]) -> ModelConfig | None:
         """选择能力最强的模型"""
         if not available_models:
             return None

@@ -1,15 +1,16 @@
 """Storage Schema"""
 
-from typing import List, Optional, Dict, Any
+from typing import Any
+
 from pydantic import BaseModel
 
 
 class StorageUploadResponse(BaseModel):
     """存储上传响应"""
     success: bool
-    url: Optional[str] = None
-    key: Optional[str] = None
-    error: Optional[str] = None
+    url: str | None = None
+    key: str | None = None
+    error: str | None = None
 
 
 class StorageFile(BaseModel):
@@ -17,12 +18,12 @@ class StorageFile(BaseModel):
     key: str
     name: str
     size: int
-    content_type: Optional[str] = None
-    url: Optional[str] = None
-    created_at: Optional[str] = None
+    content_type: str | None = None
+    url: str | None = None
+    created_at: str | None = None
 
 
 class StorageListResponse(BaseModel):
     """存储列表响应"""
-    files: List[Dict[str, Any]]
+    files: list[dict[str, Any]]
     total: int

@@ -5,7 +5,7 @@
 并提供异常处理器将异常转换为标准化的 HTTP 响应。
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import HTTPException, status
 
@@ -22,9 +22,9 @@ class AppException(HTTPException):
         self,
         status_code: int,
         detail: str,
-        headers: Optional[Dict[str, str]] = None,
-        error_code: Optional[str] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        headers: dict[str, str] | None = None,
+        error_code: str | None = None,
+        extra: dict[str, Any] | None = None,
     ):
         """
         Args:
@@ -38,7 +38,7 @@ class AppException(HTTPException):
         self.error_code = error_code
         self.extra = extra or {}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """将异常转换为字典格式"""
         result = {
             "error": self.detail,
@@ -133,7 +133,7 @@ class InsufficientPermissionsException(AppException):
 class NotFoundException(AppException):
     """资源不存在异常（404）"""
 
-    def __init__(self, resource: str = "资源", resource_id: Optional[Any] = None):
+    def __init__(self, resource: str = "资源", resource_id: Any | None = None):
         detail = f"{resource}不存在"
         if resource_id:
             detail = f"{resource} (ID: {resource_id}) 不存在"
@@ -149,7 +149,7 @@ class NotFoundException(AppException):
 class AlreadyExistsException(AppException):
     """资源已存在异常（409）"""
 
-    def __init__(self, resource: str = "资源", identifier: Optional[str] = None):
+    def __init__(self, resource: str = "资源", identifier: str | None = None):
         detail = f"{resource}已存在"
         if identifier:
             detail = f"{resource} '{identifier}' 已存在"
@@ -179,7 +179,7 @@ class BadRequestException(AppException):
 class ValidationException(AppException):
     """数据验证异常（422）"""
 
-    def __init__(self, detail: str = "数据验证失败", errors: Optional[Dict[str, Any]] = None):
+    def __init__(self, detail: str = "数据验证失败", errors: dict[str, Any] | None = None):
         super().__init__(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=detail,
@@ -205,7 +205,7 @@ class InternalServerException(AppException):
 class ServiceUnavailableException(AppException):
     """服务不可用异常（503）"""
 
-    def __init__(self, detail: str = "服务暂时不可用", retry_after: Optional[int] = None):
+    def __init__(self, detail: str = "服务暂时不可用", retry_after: int | None = None):
         super().__init__(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=detail,

@@ -1,15 +1,15 @@
 """安全守卫节点"""
 
-from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
 class GuardResult:
     """守卫检查结果"""
     passed: bool
-    error: Optional[str] = None
-    warnings: Optional[List[str]] = None
+    error: str | None = None
+    warnings: list[str] | None = None
 
 
 class Guard:
@@ -19,7 +19,7 @@ class Guard:
         self._input_checks = []
         self._output_checks = []
 
-    async def check_input(self, task: str, params: Optional[Dict[str, Any]] = None) -> GuardResult:
+    async def check_input(self, task: str, params: dict[str, Any] | None = None) -> GuardResult:
         """
         检查输入安全性
 
@@ -55,7 +55,7 @@ class Guard:
         return GuardResult(passed=True)
 
     async def check_skill(
-        self, skill_name: str, params: Dict[str, Any]
+        self, skill_name: str, params: dict[str, Any]
     ) -> GuardResult:
         """
         检查 Skill 调用的安全性
@@ -70,7 +70,7 @@ class Guard:
 
         return GuardResult(passed=True)
 
-    def _check_dangerous_commands(self, content: str) -> Optional[str]:
+    def _check_dangerous_commands(self, content: str) -> str | None:
         dangerous = ["rm -rf", "shutdown", "reboot", "mkfs", ":(){", "fork()"]
         content_lower = content.lower()
         for cmd in dangerous:
@@ -92,7 +92,7 @@ class Guard:
                 return True
         return False
 
-    def _check_sensitive_data(self, content: str) -> Optional[str]:
+    def _check_sensitive_data(self, content: str) -> str | None:
         import re
         patterns = [
             r"sk-[\w]{20,}",

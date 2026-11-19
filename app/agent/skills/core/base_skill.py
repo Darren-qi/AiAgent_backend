@@ -4,9 +4,9 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 # 工具层结构化错误码（阶段一 2026-11-16，登记见 docs/reference/error-codes.md §7）。
 # 机器可读协议：correction 按 code 分支给修正策略，字符串文案匹配降为兜底。
@@ -30,23 +30,23 @@ class SkillResult:
     """Skill 执行结果"""
     success: bool
     data: Any = None
-    error: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     # 结构化错误码（TOOL_ERROR_CODES 之一；None=未分类）。放末尾保持位置参数兼容
-    error_code: Optional[str] = None
+    error_code: str | None = None
 
 
 class BaseSkill(ABC):
     """Skill 基类"""
 
     # 默认参数定义（可被子类覆盖）
-    DEFAULT_PARAMETERS: List[Dict[str, Any]] = []
+    DEFAULT_PARAMETERS: list[dict[str, Any]] = []
 
     def __init__(self):
         self.name: str = self.__class__.__name__
         self.description: str = ""
-        self.parameters: List[Dict[str, Any]] = self.DEFAULT_PARAMETERS
-        self._skill_dir: Optional[Path] = None
+        self.parameters: list[dict[str, Any]] = self.DEFAULT_PARAMETERS
+        self._skill_dir: Path | None = None
 
     def set_skill_dir(self, path: Path):
         """设置 Skill 目录路径"""
@@ -57,7 +57,7 @@ class BaseSkill(ABC):
         """执行 Skill（异步）"""
         pass
 
-    def validate_parameters(self, params: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+    def validate_parameters(self, params: dict[str, Any]) -> tuple[bool, str | None]:
         """
         验证参数
 
@@ -71,7 +71,7 @@ class BaseSkill(ABC):
                 return False, f"缺少必需参数: {param_name}"
         return True, None
 
-    def get_schema(self) -> Dict[str, Any]:
+    def get_schema(self) -> dict[str, Any]:
         """获取 Skill 的 JSON Schema"""
         return {
             "name": self.name,
@@ -79,7 +79,7 @@ class BaseSkill(ABC):
             "parameters": self.parameters,
         }
 
-    def get_json_schema(self) -> Dict[str, Any]:
+    def get_json_schema(self) -> dict[str, Any]:
         """获取 JSON Schema 格式的参数定义"""
         properties = {}
         required = []
@@ -106,7 +106,7 @@ class BaseSkill(ABC):
         }
 
     @classmethod
-    def from_metadata(cls, metadata: Dict[str, Any]) -> "BaseSkill":
+    def from_metadata(cls, metadata: dict[str, Any]) -> "BaseSkill":
         """从元数据创建 Skill 实例"""
         skill = cls()
         if "name" in metadata:

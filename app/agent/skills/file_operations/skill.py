@@ -1,15 +1,15 @@
 """File Operations Skill - 文件操作技能"""
 
-import os
 import asyncio
 import json
+import logging
+import os
 import re
 import shutil
 import tempfile
 import time
-import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any
 
 from app.agent.skills.core.base_skill import BaseSkill, SkillResult
 
@@ -346,7 +346,7 @@ class FileOperationsSkill(BaseSkill):
         # **完整**的元素先落盘，让模型下一轮补剩下的。
         if isinstance(kwargs.get("raw"), str):
             _raw_s = kwargs.pop("raw")
-            _recovered: Optional[Dict[str, Any]] = None
+            _recovered: dict[str, Any] | None = None
             try:
                 _recovered = json.loads(_raw_s)
             except Exception:
@@ -534,7 +534,7 @@ class FileOperationsSkill(BaseSkill):
                 metadata={"operation": "file_operations", "friendly_action": "file_operations"}
             )
 
-    async def _create_project(self, file_path: str, content: str, encoding: str, task_path: Optional[str] = None, session_id: Optional[str] = None) -> SkillResult:
+    async def _create_project(self, file_path: str, content: str, encoding: str, task_path: str | None = None, session_id: str | None = None) -> SkillResult:
         """
         创建项目结构（多文件批量创建）
 
@@ -716,7 +716,7 @@ class FileOperationsSkill(BaseSkill):
             logger.error(f"[FileOps] 创建项目失败: {e}")
             return SkillResult(success=False, error=str(e))
 
-    async def _write_file(self, file_path: str, content: str, encoding: str, task_path: Optional[str] = None, session_id: Optional[str] = None) -> SkillResult:
+    async def _write_file(self, file_path: str, content: str, encoding: str, task_path: str | None = None, session_id: str | None = None) -> SkillResult:
         """
         写入文件
 
@@ -889,8 +889,8 @@ class FileOperationsSkill(BaseSkill):
             return SkillResult(success=False, error=str(e))
 
     async def _write_files_batch(self, files, encoding: str,
-                                 task_path: Optional[str] = None,
-                                 session_id: Optional[str] = None) -> SkillResult:
+                                 task_path: str | None = None,
+                                 session_id: str | None = None) -> SkillResult:
         """批量并发写入多个互不关联的文件（一次调用替代逐文件多轮）。
 
         2026-11-13 用户反馈：项目骨架创建时文件一个个写，互不干扰的文件
@@ -926,8 +926,8 @@ class FileOperationsSkill(BaseSkill):
         return SkillResult(success=True, data=data, metadata={"operation": "write"})
 
     async def _read_files_batch(self, files, encoding: str,
-                                task_path: Optional[str] = None,
-                                session_id: Optional[str] = None) -> SkillResult:
+                                task_path: str | None = None,
+                                session_id: str | None = None) -> SkillResult:
         """并行批量读取多个互不关联的文件（files 数组，与 write 对称）。
 
         2026-11-13 生产实测：模型会自然把 write 的 files 模式推广到 read，
@@ -962,7 +962,7 @@ class FileOperationsSkill(BaseSkill):
         return SkillResult(success=True, data=data, metadata={"operation": "read"})
 
     async def _edit_file(self, file_path: str, old_text, new_text, replace_all, encoding: str,
-                         session_id: Optional[str] = None, task_path: Optional[str] = None) -> SkillResult:
+                         session_id: str | None = None, task_path: str | None = None) -> SkillResult:
         """局部替换（edit）：只改 old_text 命中的片段，其余内容不动。
         对齐 Hermes patch 工具——局部改动优先用它，全量 write 仅用于重写级改动。
         """
@@ -1021,8 +1021,8 @@ class FileOperationsSkill(BaseSkill):
         )
 
     async def _edit_files_batch(self, edits, default_path: str, encoding: str,
-                                session_id: Optional[str] = None,
-                                task_path: Optional[str] = None) -> SkillResult:
+                                session_id: str | None = None,
+                                task_path: str | None = None) -> SkillResult:
         """批量局部替换（edits 数组）：一次调用完成多文件/多处 edit。
 
         2026-11-13 用户测试：模型会把 write 的 files 批量模式自然推广到
@@ -1075,7 +1075,7 @@ class FileOperationsSkill(BaseSkill):
         logger.info(f"[FileOps] 批量替换 {len(applied)}/{len(edits)} 处")
         return SkillResult(success=True, data=data, metadata={"operation": "edit_file"})
 
-    async def _read_file(self, file_path: str, encoding: str, session_id: Optional[str] = None, task_path: Optional[str] = None, offset: int = 1, limit: int = 200) -> SkillResult:
+    async def _read_file(self, file_path: str, encoding: str, session_id: str | None = None, task_path: str | None = None, offset: int = 1, limit: int = 200) -> SkillResult:
         """读取文件（分页：offset/limit + 行号，2026-11-13 对齐 Hermes 精准读取）"""
         # 优先使用 task_path（从外部传入），否则使用 _allowed_project_root
         project_root = task_path or self._allowed_project_root
@@ -1180,7 +1180,7 @@ class FileOperationsSkill(BaseSkill):
             logger.error(f"[FileOps] 读取文件失败: {e}")
             return SkillResult(success=False, error=str(e))
 
-    async def _list_directory(self, dir_path: str, task_path: Optional[str] = None) -> SkillResult:
+    async def _list_directory(self, dir_path: str, task_path: str | None = None) -> SkillResult:
         """列出目录（相对路径基于任务目录，与 read 同规则——修复丢 task_path 落到 tasks 根）"""
         try:
             project_root = task_path or self._allowed_project_root
@@ -1225,7 +1225,7 @@ class FileOperationsSkill(BaseSkill):
             logger.error(f"[FileOps] 列出目录失败: {e}")
             return SkillResult(success=False, error=str(e))
 
-    async def _delete_file(self, file_path: str, task_path: Optional[str] = None) -> SkillResult:
+    async def _delete_file(self, file_path: str, task_path: str | None = None) -> SkillResult:
         """删除文件（相对路径基于任务目录——修复丢 task_path 误删 tasks 根同名文件）"""
         try:
             project_root = task_path or self._allowed_project_root
@@ -1277,7 +1277,7 @@ class FileOperationsSkill(BaseSkill):
             logger.error(f"[FileOps] 删除文件失败: {e}")
             return SkillResult(success=False, error=str(e))
 
-    async def _move_files_batch(self, files, task_path: Optional[str] = None) -> SkillResult:
+    async def _move_files_batch(self, files, task_path: str | None = None) -> SkillResult:
         """批量移动（files 数组）：一次搬多个文件，串行执行。
 
         2026-11-13 生产取证：重构/归类任务里模型自然把批量模式推广到 move
@@ -1335,9 +1335,9 @@ class FileOperationsSkill(BaseSkill):
             data["note"] = f"{len(errors)} 项失败: " + "；".join(errors[:3])
         return SkillResult(success=True, data=data, metadata={"operation": "move"})
 
-    async def _delete_files_batch(self, files, task_path: Optional[str] = None,
-                                  session_id: Optional[str] = None,
-                                  friendly_action: Optional[str] = None) -> SkillResult:
+    async def _delete_files_batch(self, files, task_path: str | None = None,
+                                  session_id: str | None = None,
+                                  friendly_action: str | None = None) -> SkillResult:
         """批量删除：files=[{path|delete|file}] 或 paths=["a","b"]（字符串列表）。
 
         与批量 move 同语义：串行执行、单个失败进 note 不中断、全部失败才 False。
@@ -1410,7 +1410,7 @@ class FileOperationsSkill(BaseSkill):
                 return str(Path(*rest))
         return rel
 
-    def _strip_task_prefix_kwargs(self, kwargs: Dict[str, Any], task_path: str) -> Dict[str, Any]:
+    def _strip_task_prefix_kwargs(self, kwargs: dict[str, Any], task_path: str) -> dict[str, Any]:
         """对一次工具调用的所有路径键做前缀剥离（顶层 + 批量元素）。"""
         out = dict(kwargs)
         for key in ("path", "dest", "to", "from", "src", "file_path", "output_path"):
@@ -1444,7 +1444,7 @@ class FileOperationsSkill(BaseSkill):
                 out[key] = new_arr
         return out
 
-    def _resolve_move_path(self, file_path: str, task_path: Optional[str]) -> Path:
+    def _resolve_move_path(self, file_path: str, task_path: str | None) -> Path:
         """移动/删除同规则的路径解析：相对路径基于任务目录"""
         p = Path(file_path)
         if not p.is_absolute():
@@ -1455,7 +1455,7 @@ class FileOperationsSkill(BaseSkill):
                 p = self._tasks_dir / file_path
         return p
 
-    async def _move_file(self, file_path: str, dest: str, task_path: Optional[str] = None) -> SkillResult:
+    async def _move_file(self, file_path: str, dest: str, task_path: str | None = None) -> SkillResult:
         """移动/归类文件或目录：原子移动，源在原位置消失（不是复制）。
 
         path=源，dest=目标（均相对任务目录）。目标已存在时按 shell mv 语义覆盖
@@ -1552,7 +1552,7 @@ async def execute(**kwargs) -> SkillResult:
 #   None  = 无法判定 → 退化为按意图日志状态判定（done 走重放 / running 走 ambiguous）
 
 
-def verify_replay(**kwargs) -> Optional[bool]:
+def verify_replay(**kwargs) -> bool | None:
     """file_operations 的崩溃重放核验入口。"""
     op = str(kwargs.get("operation") or "").strip().lower()
     task_path = kwargs.get("task_path")
@@ -1574,7 +1574,7 @@ def verify_replay(**kwargs) -> Optional[bool]:
         return None
 
 
-def _resolve_safe(file_path: str, task_path) -> Optional[Path]:
+def _resolve_safe(file_path: str, task_path) -> Path | None:
     """解析路径并做安全检查；不安全或解析不出 → None（无法判定）。"""
     p = skill._resolve_move_path(str(file_path), task_path)
     try:
@@ -1585,7 +1585,7 @@ def _resolve_safe(file_path: str, task_path) -> Optional[Path]:
     return p
 
 
-def _collect_paths(kwargs: Dict[str, Any]) -> list:
+def _collect_paths(kwargs: dict[str, Any]) -> list:
     """收集 delete 用的目标路径（单个 + paths[]/files[] 批量）。"""
     out = []
     for key in ("path", "file_path"):
@@ -1606,7 +1606,7 @@ def _collect_paths(kwargs: Dict[str, Any]) -> list:
     return out
 
 
-def _verify_delete(kwargs: Dict[str, Any], task_path) -> Optional[bool]:
+def _verify_delete(kwargs: dict[str, Any], task_path) -> bool | None:
     targets = _collect_paths(kwargs)
     if not targets:
         return None
@@ -1624,7 +1624,7 @@ def _verify_delete(kwargs: Dict[str, Any], task_path) -> Optional[bool]:
     return None        # 部分删了，无法判定（不能拿部分当全部）
 
 
-def _verify_move(kwargs: Dict[str, Any], task_path) -> Optional[bool]:
+def _verify_move(kwargs: dict[str, Any], task_path) -> bool | None:
     pairs = []
 
     def _add(src, dst):
@@ -1665,7 +1665,7 @@ def _verify_move(kwargs: Dict[str, Any], task_path) -> Optional[bool]:
     return None
 
 
-def _edit_verdict(content: str, old_text: str, new_text: str) -> Optional[bool]:
+def _edit_verdict(content: str, old_text: str, new_text: str) -> bool | None:
     """单处编辑的判定：新文本在且旧文本不在=已生效；旧在新不在=未生效。"""
     old_in = old_text in content
     new_in = new_text in content
@@ -1676,7 +1676,7 @@ def _edit_verdict(content: str, old_text: str, new_text: str) -> Optional[bool]:
     return None   # 两者都在（new 包含 old）或都不在 → 不下结论
 
 
-def _verify_edit(kwargs: Dict[str, Any], task_path) -> Optional[bool]:
+def _verify_edit(kwargs: dict[str, Any], task_path) -> bool | None:
     encoding = str(kwargs.get("encoding") or "utf-8")
     items = []
     edits = kwargs.get("edits")

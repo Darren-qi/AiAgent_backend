@@ -1,26 +1,22 @@
 # -*- coding: utf-8 -*-
 """Agent 端点"""
 
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, BackgroundTasks, Query, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from datetime import datetime, timezone
 import asyncio
 import json
+from datetime import datetime, timezone
+from typing import Any
 
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from loguru import logger
-
-from app.api.deps import CurrentUser, OptionalCurrentUser
-from app.db.session import AsyncSessionLocal
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.api.v1.schemas.agent import AgentExecuteRequest, AgentExecuteResponse
+
 from app.agent.graphs.main_graph import AgentGraph
 from app.agent.memory.manager import MemoryManager
 from app.agent.task_executor import task_manager
-from app.security.input_guard import InputGuard
-from app.security.output_guard import OutputGuard
-from app.models.experience import SessionModel
+from app.api.deps import CurrentUser, OptionalCurrentUser
+from app.api.v1.schemas.agent import AgentExecuteRequest, AgentExecuteResponse
 from app.core.exceptions import (
     BadRequestException,
     ForbiddenException,
@@ -28,6 +24,10 @@ from app.core.exceptions import (
     ServiceUnavailableException,
     UnauthorizedException,
 )
+from app.db.session import AsyncSessionLocal
+from app.models.experience import SessionModel
+from app.security.input_guard import InputGuard
+from app.security.output_guard import OutputGuard
 
 router = APIRouter()
 
@@ -58,11 +58,11 @@ async def _load_hist_note(db: AsyncSession, session_id: str, cur_task: str,
 input_guard = InputGuard()
 output_guard = OutputGuard()
 # memory_managers 存储 (MemoryManager, AsyncSession) 元组，AsyncSession 需在请求结束时提交
-memory_managers: Dict[str, tuple] = {}
+memory_managers: dict[str, tuple] = {}
 # 会话与任务路径的映射: {session_id: task_folder_name}
-session_task_paths: Dict[str, str] = {}
+session_task_paths: dict[str, str] = {}
 # 追踪运行中的任务: {session_id: (asyncio.Task, AgentGraph)}
-running_tasks: Dict[str, tuple] = {}
+running_tasks: dict[str, tuple] = {}
 
 
 async def _finalize_db_task(task_id: str, status: str, error: str = "") -> None:
@@ -80,7 +80,7 @@ async def _finalize_db_task(task_id: str, status: str, error: str = "") -> None:
 
 
 async def _persist_assistant(session_id: str, content: str,
-                              metadata: Optional[Dict[str, Any]] = None) -> None:
+                              metadata: dict[str, Any] | None = None) -> None:
     """落库 assistant 最终回答（独立协程 + 独立 DB 会话）。
 
     不能依赖请求作用域的 db / memory_managers：图内部 on_step("complete")
@@ -106,7 +106,7 @@ async def _persist_assistant(session_id: str, content: str,
 
 
 # 会话内存存储（消息数据）
-sessions_store: Dict[str, dict] = {}
+sessions_store: dict[str, dict] = {}
 
 def _update_session_task_path(session_id: str, task_path: str):
     """更新会话的任务路径（内存 + 数据库）"""
@@ -117,10 +117,10 @@ def _update_session_task_path(session_id: str, task_path: str):
 
 
 class CreateSessionRequest(BaseModel):
-    session_id: Optional[str] = None
+    session_id: str | None = None
     title: str = "新会话"
     user_input: str = ""
-    files: Optional[List[dict]] = None
+    files: list[dict] | None = None
 
 
 @router.post("/execute/", response_model=AgentExecuteResponse)
@@ -231,6 +231,7 @@ async def execute_task_stream(
     try:
         # 检查会话是否已存在
         from sqlalchemy import select
+
         from app.models.experience import SessionModel
         stmt = select(SessionModel).where(SessionModel.session_id == session_id)
         result = await db.execute(stmt)
@@ -304,7 +305,7 @@ async def execute_task_stream(
         # 走 metadata.suggestions → get-session 组回 complete 步骤的可点击建议
         persist_state = {"text": "", "scheduled": False}
 
-        def _schedule_persist(text_value: str, metadata: Optional[Dict[str, Any]] = None):
+        def _schedule_persist(text_value: str, metadata: dict[str, Any] | None = None):
             text_value = (text_value or "").strip()
             if not text_value or persist_state["scheduled"]:
                 return
@@ -312,7 +313,7 @@ async def execute_task_stream(
             asyncio.create_task(_persist_assistant(session_id, text_value, metadata))
 
         # 定义回调函数，将事件添加到队列
-        def on_step(step_type: str, data: Dict[str, Any]):
+        def on_step(step_type: str, data: dict[str, Any]):
             if step_type == "final_summary":
                 try:
                     text = (data.get("summary") or "").strip()
@@ -513,7 +514,7 @@ async def execute_task_stream(
 
 
 @router.get("/status/{task_id}")
-async def get_task_status(task_id: str, user: OptionalCurrentUser = None) -> Dict[str, Any]:
+async def get_task_status(task_id: str, user: OptionalCurrentUser = None) -> dict[str, Any]:
     """获取任务状态"""
     return {
         "task_id": task_id,
@@ -523,7 +524,7 @@ async def get_task_status(task_id: str, user: OptionalCurrentUser = None) -> Dic
 
 
 @router.get("/debug/tasks")
-async def debug_tasks() -> Dict[str, Any]:
+async def debug_tasks() -> dict[str, Any]:
     """调试端点：查看所有运行中的任务"""
     return {
         "running_tasks_keys": list(running_tasks.keys()),
@@ -532,14 +533,14 @@ async def debug_tasks() -> Dict[str, Any]:
 
 
 @router.get("/ping/{task_id}")
-async def ping_task(task_id: str) -> Dict[str, Any]:
+async def ping_task(task_id: str) -> dict[str, Any]:
     """诊断路由：确认 abort 请求是否到达"""
     logger.warning(f"[PING] 收到 ping 请求: {task_id}")
     return {"task_id": task_id, "running_tasks": list(running_tasks.keys())}
 
 
 @router.post("/abort/{task_id}")
-async def abort_task(task_id: str, user: OptionalCurrentUser = None) -> Dict[str, Any]:
+async def abort_task(task_id: str, user: OptionalCurrentUser = None) -> dict[str, Any]:
     """中止任务"""
     from app.agent.cancel_signal import cancel_signal
 
@@ -657,8 +658,9 @@ def _build_task_tree(task_path: str) -> list:
         if not task_path:
             return []
         from pathlib import Path
-        from app.agent.skills.file_operations.skill import get_tasks_dir
+
         from app.agent.graphs.main_graph import _walk_dir
+        from app.agent.skills.file_operations.skill import get_tasks_dir
 
         base = get_tasks_dir() / task_path
         if not base.exists() or not base.is_dir():
@@ -707,6 +709,7 @@ async def _load_db_messages(db, session_id: str) -> tuple[list, list]:
     # 执行节点无条件捞取：过程行（读写/执行）也要随刷新回放，
     # 不能只在「缺正文」时才查（2026-11-12 用户反馈：刷新后过程与样式全丢）
     from sqlalchemy import select
+
     from app.models.execution_node import ExecutionNode
     nodes = (await db.execute(
         select(ExecutionNode)
@@ -1085,7 +1088,9 @@ async def read_file(file_path: str):
 async def get_files(session_id: str):
     """某会话产出的文件列表（重开会话时恢复文件结构）。"""
     from pathlib import Path
+
     from sqlalchemy import select
+
     from app.models import SessionFile
     async with AsyncSessionLocal() as s:
         rows = (await s.execute(
@@ -1110,6 +1115,7 @@ async def download_dir(dir: str):
     """打包整个任务目录为 zip 下载。"""
     import io
     import zipfile
+
     from fastapi.responses import StreamingResponse
     p = _safe_file(dir)
     if not p.is_dir():

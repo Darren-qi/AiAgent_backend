@@ -9,12 +9,12 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, String, Text, Integer, ForeignKey
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, IDMixin, TimestampMixin, SoftDeleteMixin
+from app.db.base import Base, IDMixin, SoftDeleteMixin, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -90,14 +90,14 @@ class Post(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
     )
 
     # 摘要（可选，用于列表展示）
-    summary: Mapped[Optional[str]] = mapped_column(
+    summary: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="文章摘要",
     )
 
     # 封面图片 URL
-    cover_image: Mapped[Optional[str]] = mapped_column(
+    cover_image: Mapped[str | None] = mapped_column(
         String(500),
         nullable=True,
         comment="封面图片URL",
@@ -108,7 +108,7 @@ class Post(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
     # =========================================
 
     # 分类
-    category: Mapped[Optional[str]] = mapped_column(
+    category: Mapped[str | None] = mapped_column(
         String(50),
         nullable=True,
         index=True,
@@ -116,7 +116,7 @@ class Post(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
     )
 
     # 标签（逗号分隔的字符串）
-    tags: Mapped[Optional[str]] = mapped_column(
+    tags: Mapped[str | None] = mapped_column(
         String(255),
         nullable=True,
         comment="文章标签（逗号分隔）",
@@ -185,7 +185,7 @@ class Post(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
     )
 
     # Meta 描述（SEO）
-    meta_description: Mapped[Optional[str]] = mapped_column(
+    meta_description: Mapped[str | None] = mapped_column(
         String(160),
         nullable=True,
         comment="Meta描述",
@@ -196,7 +196,7 @@ class Post(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
     # =========================================
 
     # 发布时间（可选，草稿状态下为空）
-    published_at: Mapped[Optional[datetime]] = mapped_column(
+    published_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         comment="发布时间",
@@ -241,7 +241,7 @@ class Post(Base, IDMixin, TimestampMixin, SoftDeleteMixin):
         return self.status == PostStatus.DRAFT
 
     @property
-    def tag_list(self) -> List[str]:
+    def tag_list(self) -> list[str]:
         """获取标签列表"""
         if not self.tags:
             return []

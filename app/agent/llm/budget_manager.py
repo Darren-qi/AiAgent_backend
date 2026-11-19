@@ -1,9 +1,8 @@
 """LLM 预算管理器"""
 
 import os
-from typing import Dict, Optional
-from datetime import datetime
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 
 
@@ -32,7 +31,7 @@ class BudgetInfo:
 class BudgetManager:
     """预算管理器"""
 
-    def __init__(self, config: Optional[Dict] = None):
+    def __init__(self, config: dict | None = None):
         self.config = config or {}
 
         self.daily_limit = float(os.environ.get("BUDGET_DAILY_LIMIT", "10.0"))

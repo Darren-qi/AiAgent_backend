@@ -5,26 +5,25 @@ Models 模块 __init__.py
 导入顺序重要：基类 -> 用户 -> 文章。
 """
 
-from app.db.base import Base, IDMixin, TimestampMixin, SoftDeleteMixin
-from app.models.user import User, UserRole, UserStatus
-from app.models.post import Post, PostStatus, PostVisibility
-from app.models.experience import (
-    ExperienceModel,
-    SessionModel,
-    TaskModel,
-    SessionContext,
-    SessionFile,
-)
-from app.models.execution_node import ExecutionNode
-from app.models.action_journal import ActionJournal
-
 # Memory models - 导入以注册到 Base.metadata
 from app.agent.memory.models import (  # noqa: F401
     ConversationMessage,
-    SemanticFact,
     EpisodicEvent,
+    SemanticFact,
     WorkingMemory,
 )
+from app.db.base import Base, IDMixin, SoftDeleteMixin, TimestampMixin
+from app.models.action_journal import ActionJournal
+from app.models.execution_node import ExecutionNode
+from app.models.experience import (
+    ExperienceModel,
+    SessionContext,
+    SessionFile,
+    SessionModel,
+    TaskModel,
+)
+from app.models.post import Post, PostStatus, PostVisibility
+from app.models.user import User, UserRole, UserStatus
 
 __all__ = [
     # Base

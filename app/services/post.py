@@ -4,15 +4,14 @@
 封装文章相关的业务逻辑。
 """
 
-from datetime import datetime, timezone
-from typing import List, Optional, Tuple
 import re
+from datetime import datetime, timezone
 
-from sqlalchemy import select, func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import NotFoundException, BadRequestException
+from app.core.exceptions import BadRequestException, NotFoundException
 from app.models.post import Post, PostStatus, PostVisibility
 from app.models.user import User
 from app.schemas.post import PostCreate, PostUpdate
@@ -112,7 +111,7 @@ class PostService:
         self,
         post_id: int,
         post_data: PostUpdate,
-        current_user: Optional[User] = None,
+        current_user: User | None = None,
     ) -> Post:
         """
         更新文章
@@ -197,14 +196,14 @@ class PostService:
         self,
         page: int = 1,
         page_size: int = 20,
-        keyword: Optional[str] = None,
-        category: Optional[str] = None,
-        tag: Optional[str] = None,
-        status: Optional[PostStatus] = None,
-        author_id: Optional[int] = None,
-        visibility: Optional[PostVisibility] = None,
+        keyword: str | None = None,
+        category: str | None = None,
+        tag: str | None = None,
+        status: PostStatus | None = None,
+        author_id: int | None = None,
+        visibility: PostVisibility | None = None,
         include_drafts: bool = False,
-    ) -> Tuple[List[Post], int]:
+    ) -> tuple[list[Post], int]:
         """
         分页获取文章列表
 
@@ -265,8 +264,8 @@ class PostService:
         user_id: int,
         page: int = 1,
         page_size: int = 20,
-        status: Optional[PostStatus] = None,
-    ) -> Tuple[List[Post], int]:
+        status: PostStatus | None = None,
+    ) -> tuple[list[Post], int]:
         """
         获取用户的文章列表
 

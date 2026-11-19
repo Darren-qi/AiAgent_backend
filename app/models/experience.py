@@ -16,10 +16,10 @@
     - session_files: 会话文件表
 """
 
-from typing import Optional
-from sqlalchemy import String, Text, Integer, Boolean, ForeignKey, JSON, Float
+
+from sqlalchemy import JSON, Boolean, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import Index
+
 from app.db.base import Base, IDMixin, TimestampMixin
 
 
@@ -82,7 +82,7 @@ class ExperienceModel(Base, IDMixin, TimestampMixin):
     )
 
     # 执行步骤 (JSON)
-    steps: Mapped[Optional[dict]] = mapped_column(
+    steps: Mapped[dict | None] = mapped_column(
         JSON,
         nullable=True,
         comment="执行步骤",
@@ -113,14 +113,14 @@ class ExperienceModel(Base, IDMixin, TimestampMixin):
     )
 
     # 额外元数据 (JSON)
-    meta_data: Mapped[Optional[dict]] = mapped_column(
+    meta_data: Mapped[dict | None] = mapped_column(
         JSON,
         nullable=True,
         comment="元数据",
     )
 
     # 用户 ID (可选)
-    user_id: Mapped[Optional[int]] = mapped_column(
+    user_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=True,
@@ -175,7 +175,7 @@ class SessionModel(Base, IDMixin, TimestampMixin):
     )
 
     # 会话标题
-    title: Mapped[Optional[str]] = mapped_column(
+    title: Mapped[str | None] = mapped_column(
         String(200),
         nullable=True,
         comment="会话标题",
@@ -268,7 +268,7 @@ class TaskModel(Base, IDMixin, TimestampMixin):
     )
 
     # 任务类型
-    task_type: Mapped[Optional[str]] = mapped_column(
+    task_type: Mapped[str | None] = mapped_column(
         String(50),
         nullable=True,
         index=True,
@@ -284,21 +284,21 @@ class TaskModel(Base, IDMixin, TimestampMixin):
     )
 
     # 执行结果
-    result: Mapped[Optional[str]] = mapped_column(
+    result: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="执行结果",
     )
 
     # 错误信息
-    error: Mapped[Optional[str]] = mapped_column(
+    error: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="错误信息",
     )
 
     # 执行时间 (秒)
-    execution_time: Mapped[Optional[float]] = mapped_column(
+    execution_time: Mapped[float | None] = mapped_column(
         Float,
         nullable=True,
         comment="执行时间",
@@ -313,14 +313,14 @@ class TaskModel(Base, IDMixin, TimestampMixin):
     )
 
     # 使用模型
-    model: Mapped[Optional[str]] = mapped_column(
+    model: Mapped[str | None] = mapped_column(
         String(50),
         nullable=True,
         comment="使用的模型",
     )
 
     # 元数据 (JSON)
-    meta_data: Mapped[Optional[dict]] = mapped_column(
+    meta_data: Mapped[dict | None] = mapped_column(
         JSON,
         nullable=True,
         comment="元数据",
@@ -439,7 +439,7 @@ class SessionFile(Base, IDMixin, TimestampMixin):
     )
 
     # 绝对路径 (可选)
-    absolute_path: Mapped[Optional[str]] = mapped_column(
+    absolute_path: Mapped[str | None] = mapped_column(
         String(1000),
         nullable=True,
         comment="绝对路径",
@@ -461,7 +461,7 @@ class SessionFile(Base, IDMixin, TimestampMixin):
     )
 
     # 语言/技术栈 (可选，如 python, javascript, html)
-    language: Mapped[Optional[str]] = mapped_column(
+    language: Mapped[str | None] = mapped_column(
         String(50),
         nullable=True,
         comment="语言/技术栈",

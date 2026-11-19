@@ -5,17 +5,17 @@
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional
 
 from .config import ContextConfig
 from .items import ContextItem
 
 # 相似性计算器签名：(item, query) -> [-1,1]；None 表示未配置
-SimilarityFn = Callable[[ContextItem, str], Optional[float]]
+SimilarityFn = Callable[[ContextItem, str], float | None]
 
 
-def cosine(a: List[float], b: List[float]) -> float:
+def cosine(a: list[float], b: list[float]) -> float:
     """余弦相似度（numpy 可用时走 numpy，否则纯 Python）。"""
     if not a or not b or len(a) != len(b):
         return 0.0
@@ -41,7 +41,7 @@ class ScoreBreakdown:
     recency: float
     frequency: float
     size_penalty: float
-    weights: Dict[str, float]
+    weights: dict[str, float]
 
     def explain(self) -> str:
         return (f"{self.item_id}: total={self.total:.3f} "
@@ -55,11 +55,11 @@ class Scorer:
     """按配置权重计算保留价值，从低到高淘汰。"""
 
     def __init__(self, cfg: ContextConfig,
-                 similarity_fn: Optional[SimilarityFn] = None) -> None:
+                 similarity_fn: SimilarityFn | None = None) -> None:
         self.cfg = cfg
         self.similarity_fn = similarity_fn
 
-    def _weights(self, topic_switched: bool) -> Dict[str, float]:
+    def _weights(self, topic_switched: bool) -> dict[str, float]:
         if topic_switched:
             return {
                 "similarity": self.cfg.topic_switch_weight_similarity,
@@ -104,9 +104,9 @@ class Scorer:
             item_id=item.id, total=total, similarity=sim, recency=recency,
             frequency=frequency, size_penalty=size_penalty, weights=w)
 
-    def rank_asc(self, candidates: List[ContextItem], current_step: int,
+    def rank_asc(self, candidates: list[ContextItem], current_step: int,
                  query: str = "", topic_switched: bool = False,
-                 max_tokens: int = 1) -> List[ScoreBreakdown]:
+                 max_tokens: int = 1) -> list[ScoreBreakdown]:
         """保留价值从低到高（先淘汰的排前面）。"""
         items = [self.score(it, current_step, query, topic_switched, max_tokens)
                  for it in candidates]

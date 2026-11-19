@@ -1,17 +1,17 @@
 """Docker 沙箱"""
 
 import os
-import docker
-from typing import Optional
 from dataclasses import dataclass
+
+import docker
 
 
 @dataclass
 class SandboxResult:
     """沙箱执行结果"""
     success: bool
-    output: Optional[str] = None
-    error: Optional[str] = None
+    output: str | None = None
+    error: str | None = None
     exit_code: int = 0
     execution_time: float = 0.0
 
@@ -27,7 +27,7 @@ class DockerSandbox:
         self.timeout = int(os.environ.get("SANDBOX_TIMEOUT", "300"))
         self.network_disabled = os.environ.get("SANDBOX_NETWORK_ISOLATION", "true").lower() == "true"
 
-        self._client: Optional[docker.DockerClient] = None
+        self._client: docker.DockerClient | None = None
 
     def _get_client(self) -> docker.DockerClient:
         """获取 Docker 客户端"""

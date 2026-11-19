@@ -6,7 +6,7 @@
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -55,8 +55,8 @@ class SecurityManager:
     def create_access_token(
         self,
         subject: str,
-        expires_delta: Optional[timedelta] = None,
-        extra_claims: Optional[Dict[str, Any]] = None,
+        expires_delta: timedelta | None = None,
+        extra_claims: dict[str, Any] | None = None,
     ) -> str:
         """
         创建访问令牌 (Access Token)
@@ -77,7 +77,7 @@ class SecurityManager:
             )
 
         # 构建令牌内容
-        to_encode: Dict[str, Any] = {
+        to_encode: dict[str, Any] = {
             "exp": expire,           # 过期时间（标准声明）
             "sub": str(subject),     # 主题（标准声明）
             "type": "access",        # 令牌类型标识
@@ -105,7 +105,7 @@ class SecurityManager:
             days=self.settings.refresh_token_expire_days
         )
 
-        to_encode: Dict[str, Any] = {
+        to_encode: dict[str, Any] = {
             "exp": expire,
             "sub": str(subject),
             "type": "refresh",
@@ -118,7 +118,7 @@ class SecurityManager:
         )
         return encoded_jwt
 
-    def verify_token(self, token: str, expected_type: str = "access") -> Optional[Dict[str, Any]]:
+    def verify_token(self, token: str, expected_type: str = "access") -> dict[str, Any] | None:
         """
         验证并解码 JWT 令牌
 
@@ -147,7 +147,7 @@ class SecurityManager:
             # 令牌过期、签名错误等都会抛出 JWTError
             return None
 
-    def decode_token(self, token: str) -> Optional[str]:
+    def decode_token(self, token: str) -> str | None:
         """
         解码令牌并提取主题（用户标识）
 
@@ -186,11 +186,11 @@ def create_refresh_token(subject: str) -> str:
     return security_manager.create_refresh_token(subject)
 
 
-def verify_access_token(token: str) -> Optional[Dict[str, Any]]:
+def verify_access_token(token: str) -> dict[str, Any] | None:
     """快捷函数：验证访问令牌"""
     return security_manager.verify_token(token, expected_type="access")
 
 
-def verify_refresh_token(token: str) -> Optional[Dict[str, Any]]:
+def verify_refresh_token(token: str) -> dict[str, Any] | None:
     """快捷函数：验证刷新令牌"""
     return security_manager.verify_token(token, expected_type="refresh")

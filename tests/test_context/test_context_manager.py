@@ -11,8 +11,13 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from app.agent.context import (  # noqa: E402
-    ContextConfig, ContextItem, ContextManager, ItemType, LoadState,
-    RecallConfig, count_tokens,
+    ContextConfig,
+    ContextItem,
+    ContextManager,
+    ItemType,
+    LoadState,
+    RecallConfig,
+    count_tokens,
 )
 
 

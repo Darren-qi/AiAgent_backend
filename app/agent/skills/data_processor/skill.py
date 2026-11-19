@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Dict, Any
+from typing import Any
 
 from app.agent.skills.core.base_skill import BaseSkill, SkillResult
 
@@ -65,7 +65,7 @@ class DataProcessorSkill(BaseSkill):
         except (json.JSONDecodeError, TypeError):
             return {"raw": str(input_data)}
 
-    def _filter_data(self, data: Any, options: Dict) -> Any:
+    def _filter_data(self, data: Any, options: dict) -> Any:
         if not isinstance(data, list):
             return data
         field = options.get("field")
@@ -90,7 +90,7 @@ class DataProcessorSkill(BaseSkill):
                     filtered.append(item)
         return filtered
 
-    def _sort_data(self, data: Any, options: Dict) -> Any:
+    def _sort_data(self, data: Any, options: dict) -> Any:
         if not isinstance(data, list):
             return data
         field = options.get("field", None)
@@ -99,7 +99,7 @@ class DataProcessorSkill(BaseSkill):
             return sorted(data, key=lambda x: x.get(field, "") if isinstance(x, dict) else x, reverse=reverse)
         return sorted(data, key=str, reverse=reverse)
 
-    def _aggregate_data(self, data: Any, options: Dict) -> Any:
+    def _aggregate_data(self, data: Any, options: dict) -> Any:
         if not isinstance(data, list):
             return data
         field = options.get("field")
@@ -122,7 +122,7 @@ class DataProcessorSkill(BaseSkill):
             return {"max": max(numeric) if numeric else None}
         return {"count": len(values)}
 
-    def _transform_data(self, data: Any, options: Dict) -> Any:
+    def _transform_data(self, data: Any, options: dict) -> Any:
         transform_type = options.get("type", "to_list")
         if transform_type == "to_dict":
             if isinstance(data, list):

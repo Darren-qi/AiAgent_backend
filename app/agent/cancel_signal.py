@@ -6,7 +6,8 @@
 
 import asyncio
 import logging
-from typing import Optional, Callable, Coroutine, Any
+from collections.abc import Callable, Coroutine
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 

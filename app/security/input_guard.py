@@ -2,7 +2,6 @@
 
 import os
 import re
-from typing import Optional
 
 
 class InputGuard:
@@ -17,7 +16,7 @@ class InputGuard:
         dangerous_str = os.environ.get("DANGEROUS_KEYWORDS", "")
         self.dangerous_keywords = [kw.strip() for kw in dangerous_str.split(",") if kw.strip()]
 
-    def check(self, content: str) -> tuple[bool, Optional[str]]:
+    def check(self, content: str) -> tuple[bool, str | None]:
         """
         检查输入内容的安全性
 

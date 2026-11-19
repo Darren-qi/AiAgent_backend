@@ -1,16 +1,12 @@
 """LLM 工厂类"""
 
-from typing import Dict, Any, Optional, Type
+from typing import Any, Optional
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
-
-from app.agent.llm.types import ModelProvider, ChatRequest, LLMResponse
-from app.agent.llm.router import ModelRouter
-from app.agent.llm.budget_manager import BudgetManager
 
 # ── 真实 usage 追踪（P1/P2，2026-11-14）─────────────────────────────
 # ① 每次 LLM 调用返回后用真实 prompt_tokens 校准 tiktoken 估算
@@ -22,10 +18,14 @@ from app.agent.llm.budget_manager import BudgetManager
 # 全部 try/except 兜底：追踪失败绝不影响 LLM 调用本身。
 import contextvars
 
+from app.agent.llm.budget_manager import BudgetManager
+from app.agent.llm.router import ModelRouter
+from app.agent.llm.types import ChatRequest, LLMResponse, ModelProvider
+
 _usage_scope: contextvars.ContextVar = contextvars.ContextVar(
     "llm_usage_scope", default="")
-_TASK_USAGE: Dict[str, Dict[str, Any]] = {}
-_LAST_USAGE: Dict[str, Any] = {
+_TASK_USAGE: dict[str, dict[str, Any]] = {}
+_LAST_USAGE: dict[str, Any] = {
     "prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0}
 
 
@@ -34,14 +34,14 @@ def set_usage_scope(scope: str) -> None:
     _usage_scope.set(scope or "")
 
 
-def reset_task_usage(scope: Optional[str] = None) -> None:
+def reset_task_usage(scope: str | None = None) -> None:
     """清零某 scope 的累计（不传则用当前 scope；key 缺省回落 global）。"""
     key = scope or _usage_scope.get() or "global"
     _TASK_USAGE[key] = {"prompt_tokens": 0, "completion_tokens": 0,
                         "cost": 0.0, "calls": 0, "peak_in": 0}
 
 
-def get_task_usage(scope: Optional[str] = None) -> Dict[str, Any]:
+def get_task_usage(scope: str | None = None) -> dict[str, Any]:
     """读某 scope 的本 turn 累计（不传则用当前 scope）。"""
     key = scope or _usage_scope.get() or "global"
     return dict(_TASK_USAGE.get(key) or {"prompt_tokens": 0,
@@ -49,7 +49,7 @@ def get_task_usage(scope: Optional[str] = None) -> Dict[str, Any]:
                                          "cost": 0.0, "calls": 0, "peak_in": 0})
 
 
-def get_last_usage() -> Dict[str, Any]:
+def get_last_usage() -> dict[str, Any]:
     """最近一次 LLM 调用的真实 usage（跨 scope）。"""
     return dict(_LAST_USAGE)
 
@@ -58,10 +58,10 @@ class LLMFactory:
     """LLM 工厂类 - 统一管理所有模型提供商"""
 
     _instance: Optional["LLMFactory"] = None
-    _providers: Dict[ModelProvider, Type] = {}
+    _providers: dict[ModelProvider, type] = {}
 
     @classmethod
-    def get_instance(cls, config: Optional[Dict[str, Any]] = None) -> "LLMFactory":
+    def get_instance(cls, config: dict[str, Any] | None = None) -> "LLMFactory":
         """获取单例实例"""
         if cls._instance is None:
             cls._instance = cls(config)
@@ -75,7 +75,7 @@ class LLMFactory:
             cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         if self._initialized:
             return
 
@@ -84,21 +84,21 @@ class LLMFactory:
         self.budget_manager = BudgetManager()
 
         self._providers = {}
-        self._provider_instances: Dict[ModelProvider, Any] = {}
+        self._provider_instances: dict[ModelProvider, Any] = {}
 
         self._register_providers()
         self._initialized = True
 
     def _register_providers(self) -> None:
         """注册所有提供商"""
-        from app.agent.llm.providers.deepseek import DeepSeekProvider
-        from app.agent.llm.providers.kimi import KimiProvider
-        from app.agent.llm.providers.zhipu import ZhipuProvider
-        from app.agent.llm.providers.openai import OpenAIProvider
         from app.agent.llm.providers.anthropic import AnthropicProvider
+        from app.agent.llm.providers.deepseek import DeepSeekProvider
         from app.agent.llm.providers.gemini import GeminiProvider
-        from app.agent.llm.providers.ollama import OllamaProvider
+        from app.agent.llm.providers.kimi import KimiProvider
         from app.agent.llm.providers.minimax import MiniMaxProvider
+        from app.agent.llm.providers.ollama import OllamaProvider
+        from app.agent.llm.providers.openai import OpenAIProvider
+        from app.agent.llm.providers.zhipu import ZhipuProvider
 
         self._providers = {
             ModelProvider.DEEPSEEK: DeepSeekProvider,
@@ -131,14 +131,14 @@ class LLMFactory:
     async def chat(
         self,
         messages: list,
-        model: Optional[str] = None,
-        strategy: Optional[str] = None,
-        task_id: Optional[str] = None,
+        model: str | None = None,
+        strategy: str | None = None,
+        task_id: str | None = None,
         **kwargs
     ) -> LLMResponse:
         """发送聊天请求（支持可取消）"""
+        from app.agent.cancel_signal import cancel_signal, cancellable_chat
         from app.agent.llm.types import ChatMessage
-        from app.agent.cancel_signal import cancellable_chat, cancel_signal
 
         chat_messages = [
             ChatMessage(role=m.get("role", "user"), content=m.get("content", ""))
@@ -225,8 +225,8 @@ class LLMFactory:
             # 阶段六：LLM 层打点——app.log（loguru→文件，含 model/latency）
             # + JSONL run 日志；任何失败只降级不阻塞调用返回。
             try:
-                from app.utils.logger import get_logger
                 from app.agent.trace import run_log
+                from app.utils.logger import get_logger
                 _model = (getattr(result, "model", None)
                           or (selected_model.name if selected_model else "-"))
                 _provider = str(getattr(result, "provider", None)

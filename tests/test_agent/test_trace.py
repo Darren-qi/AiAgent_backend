@@ -10,9 +10,9 @@ import json
 
 import pytest
 
+from app.agent import trace as trace_mod
 from app.agent.skills.core.progressive_loader import get_loader
 from app.agent.skills.guard import tool_guard
-from app.agent import trace as trace_mod
 from app.agent.trace import configure_run_log, params_digest, run_log
 
 

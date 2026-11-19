@@ -3,8 +3,9 @@
 import os
 import sys
 import time
-import pytest
 from pathlib import Path
+
+import pytest
 
 # 设置项目根目录
 project_root = Path(__file__).parent.parent.parent

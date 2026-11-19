@@ -1,6 +1,7 @@
 """飞书 (Lark) 机器人"""
 
-from typing import Dict, Any, Optional
+from typing import Any
+
 import httpx
 
 
@@ -10,7 +11,7 @@ class FeishuBot:
     def __init__(self, app_id: str, app_secret: str):
         self.app_id = app_id
         self.app_secret = app_secret
-        self.access_token: Optional[str] = None
+        self.access_token: str | None = None
 
     async def get_access_token(self) -> str:
         """获取访问令牌"""
@@ -23,7 +24,7 @@ class FeishuBot:
             self.access_token = data.get("tenant_access_token", "")
             return self.access_token
 
-    async def send_message(self, receive_id: str, msg_type: str, content: Dict[str, Any]) -> Dict[str, Any]:
+    async def send_message(self, receive_id: str, msg_type: str, content: dict[str, Any]) -> dict[str, Any]:
         """发送消息"""
         token = self.access_token or await self.get_access_token()
         async with httpx.AsyncClient() as client:
@@ -39,15 +40,15 @@ class FeishuBot:
             )
             return response.json()
 
-    async def send_text(self, receive_id: str, text: str) -> Dict[str, Any]:
+    async def send_text(self, receive_id: str, text: str) -> dict[str, Any]:
         """发送文本消息"""
         return await self.send_message(receive_id, "text", {"text": text})
 
-    async def create_webhook(self, name: str, webhook_url: str) -> Dict[str, Any]:
+    async def create_webhook(self, name: str, webhook_url: str) -> dict[str, Any]:
         """创建自定义机器人 webhook"""
         return {"success": True, "webhook_url": webhook_url}
 
-    async def send_webhook_message(self, webhook_url: str, msg: Dict[str, Any]) -> bool:
+    async def send_webhook_message(self, webhook_url: str, msg: dict[str, Any]) -> bool:
         """通过 webhook 发送消息"""
         async with httpx.AsyncClient() as client:
             response = await client.post(webhook_url, json=msg)

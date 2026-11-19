@@ -1,7 +1,8 @@
 """Session Schema"""
 
-from typing import List, Dict, Any
 from datetime import datetime
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -16,12 +17,12 @@ class SessionResponse(BaseModel):
     """会话响应"""
     session_id: str
     user_id: str
-    messages: List[Dict[str, Any]]
+    messages: list[dict[str, Any]]
     created_at: str
     updated_at: str
 
 
 class SessionListResponse(BaseModel):
     """会话列表响应"""
-    sessions: List[SessionResponse]
+    sessions: list[SessionResponse]
     total: int

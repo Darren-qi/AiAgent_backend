@@ -2,13 +2,13 @@
 用户服务模块
 """
 
-from typing import List, Optional, Tuple
-from sqlalchemy import select, func, or_
+
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import User, UserRole, UserStatus
-from app.schemas.user import UserCreate, UserUpdate, UserAdminUpdate
 from app.core.security import hash_password, verify_password
+from app.models.user import User, UserRole, UserStatus
+from app.schemas.user import UserAdminUpdate, UserCreate, UserUpdate
 
 
 class UserService:
@@ -17,22 +17,22 @@ class UserService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_user_by_id(self, user_id: int) -> Optional[User]:
+    async def get_user_by_id(self, user_id: int) -> User | None:
         """根据 ID 获取用户"""
         result = await self.db.execute(select(User).where(User.id == user_id))
         return result.scalar_one_or_none()
 
-    async def get_user_by_email(self, email: str) -> Optional[User]:
+    async def get_user_by_email(self, email: str) -> User | None:
         """根据邮箱获取用户"""
         result = await self.db.execute(select(User).where(User.email == email))
         return result.scalar_one_or_none()
 
-    async def get_user_by_username(self, username: str) -> Optional[User]:
+    async def get_user_by_username(self, username: str) -> User | None:
         """根据用户名获取用户"""
         result = await self.db.execute(select(User).where(User.username == username))
         return result.scalar_one_or_none()
 
-    async def get_user(self, identifier: str) -> Optional[User]:
+    async def get_user(self, identifier: str) -> User | None:
         """根据用户名或邮箱获取用户"""
         user = await self.get_user_by_username(identifier)
         if user:
@@ -57,21 +57,21 @@ class UserService:
         await self.db.refresh(user)
         return user
 
-    async def verify_user(self, username: str, password: str) -> Optional[User]:
+    async def verify_user(self, username: str, password: str) -> User | None:
         """验证用户登录"""
         user = await self.get_user_by_username(username)
         if user and verify_password(password, user.hashed_password):
             return user
         return None
 
-    async def authenticate(self, username_or_email: str, password: str) -> Optional[User]:
+    async def authenticate(self, username_or_email: str, password: str) -> User | None:
         """根据用户名/邮箱和密码认证用户"""
         user = await self.get_user(username_or_email)
         if user and verify_password(password, user.hashed_password):
             return user
         return None
 
-    async def update_user(self, user_id: int, user_data: UserUpdate) -> Optional[User]:
+    async def update_user(self, user_id: int, user_data: UserUpdate) -> User | None:
         """更新用户信息"""
         user = await self.get_user_by_id(user_id)
         if not user:
@@ -95,7 +95,7 @@ class UserService:
         await self.db.commit()
         return True
 
-    async def admin_update_user(self, user_id: int, admin_data: UserAdminUpdate) -> Optional[User]:
+    async def admin_update_user(self, user_id: int, admin_data: UserAdminUpdate) -> User | None:
         """管理员更新用户"""
         user = await self.get_user_by_id(user_id)
         if not user:
@@ -122,11 +122,11 @@ class UserService:
         self,
         page: int = 1,
         page_size: int = 20,
-        keyword: Optional[str] = None,
-        role: Optional[UserRole] = None,
-        status: Optional[UserStatus] = None,
-        is_active: Optional[bool] = None,
-    ) -> Tuple[List[User], int]:
+        keyword: str | None = None,
+        role: UserRole | None = None,
+        status: UserStatus | None = None,
+        is_active: bool | None = None,
+    ) -> tuple[list[User], int]:
         """分页获取用户列表"""
         query = select(User).where(User.deleted_at.is_(None))
 

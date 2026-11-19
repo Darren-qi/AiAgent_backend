@@ -5,9 +5,9 @@
 使用 SQLAlchemy 2.0 异步 API，支持 PostgreSQL。
 """
 
-from contextlib import asynccontextmanager
 import logging
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -156,7 +156,7 @@ async def init_db() -> None:
     from app.db.base import Base
 
     # 导入所有模型以确保它们被注册到 Base.metadata
-    from app.models import user, post  # noqa: F401
+    from app.models import post, user  # noqa: F401
 
     async with engine.begin() as conn:
         # 创建所有表（如果不存在）
@@ -178,7 +178,9 @@ async def sweep_orphan_tasks() -> int:
       _finalize_db_task 会把最终状态覆盖回来，误判只短暂存在。
     """
     from datetime import datetime, timedelta, timezone
+
     from sqlalchemy import update
+
     from app.models.experience import TaskModel
 
     try:

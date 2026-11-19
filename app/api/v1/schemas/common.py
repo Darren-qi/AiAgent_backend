@@ -2,9 +2,9 @@
 API v1 Schemas 通用模型
 """
 
-from typing import Generic, TypeVar, Optional, List, Any
-from pydantic import BaseModel, Field
+from typing import Any, Generic, TypeVar
 
+from pydantic import BaseModel, Field
 
 T = TypeVar("T")
 
@@ -44,7 +44,7 @@ class PageMeta(BaseModel):
 
 
 class PageResponse(BaseModel, Generic[T]):
-    items: List[T] = Field(description="数据列表")
+    items: list[T] = Field(description="数据列表")
     meta: PageMeta = Field(description="分页元数据")
 
 
@@ -56,11 +56,11 @@ class ErrorDetail(BaseModel):
 class ErrorResponse(BaseModel):
     success: bool = Field(default=False)
     error: str = Field(description="错误信息")
-    error_code: Optional[str] = Field(default=None, description="错误码")
-    details: Optional[List[ErrorDetail]] = Field(default=None, description="详细错误信息")
+    error_code: str | None = Field(default=None, description="错误码")
+    details: list[ErrorDetail] | None = Field(default=None, description="详细错误信息")
 
 
 class SuccessResponse(BaseModel):
     success: bool = Field(default=True)
     message: str = Field(default="操作成功")
-    data: Optional[Any] = Field(default=None, description="返回数据")
+    data: Any | None = Field(default=None, description="返回数据")

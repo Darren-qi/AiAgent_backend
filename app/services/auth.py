@@ -8,25 +8,24 @@
 - 密码重置
 """
 
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
 import secrets
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import (
-    create_access_token,
-    create_refresh_token,
-    verify_access_token,
-    verify_refresh_token,
-    hash_password,
-    verify_password,
-)
 from app.core.config import get_settings
 from app.core.exceptions import (
     InvalidCredentialsException,
-    TokenExpiredException,
     InvalidTokenException,
+    TokenExpiredException,
+)
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    hash_password,
+    verify_access_token,
+    verify_password,
+    verify_refresh_token,
 )
 from app.models.user import User
 from app.schemas.token import Token
@@ -46,7 +45,7 @@ class AuthService:
         self.user_service = UserService(db)
         self.settings = get_settings()
 
-    async def login(self, username_or_email: str, password: str) -> Tuple[User, Token]:
+    async def login(self, username_or_email: str, password: str) -> tuple[User, Token]:
         """
         用户登录
 
@@ -63,7 +62,7 @@ class AuthService:
 
         return user, token
 
-    async def register(self, user_data: UserCreate) -> Tuple[User, Token]:
+    async def register(self, user_data: UserCreate) -> tuple[User, Token]:
         """
         用户注册
 
@@ -134,7 +133,7 @@ class AuthService:
             expires_in=self.settings.access_token_expire_minutes * 60,
         )
 
-    async def generate_password_reset_token(self, email: str) -> Optional[str]:
+    async def generate_password_reset_token(self, email: str) -> str | None:
         """
         生成密码重置令牌
 
@@ -174,7 +173,7 @@ class AuthService:
         # 4. 使令牌失效
         pass
 
-    async def generate_email_verification_token(self, user_id: int) -> Optional[str]:
+    async def generate_email_verification_token(self, user_id: int) -> str | None:
         """
         生成邮箱验证令牌
 

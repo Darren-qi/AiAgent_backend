@@ -1,9 +1,9 @@
 """监督 Agent"""
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Any
 
-from app.agent.agents.base import BaseAgent, AgentType, AgentResult
+from app.agent.agents.base import AgentResult, AgentType, BaseAgent
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,8 @@ class SupervisorAgent(BaseAgent):
     async def run(
         self,
         task: str,
-        current_state: Dict[str, Any],
-        context: Optional[Dict[str, Any]] = None
+        current_state: dict[str, Any],
+        context: dict[str, Any] | None = None
     ) -> AgentResult:
         """执行监督任务"""
         logger.info(f"[SupervisorAgent] 监督任务: {task[:50]}...")
@@ -74,10 +74,10 @@ class SupervisorAgent(BaseAgent):
         self,
         iteration: int,
         budget_status: str,
-        error: Optional[str],
+        error: str | None,
         results_count: int,
-        context: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        context: dict[str, Any]
+    ) -> dict[str, Any]:
         """做出监督决策"""
         # 1. 检查预算状态
         if budget_status == "exhausted":

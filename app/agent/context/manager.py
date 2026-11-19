@@ -13,14 +13,21 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
 
 from .budget import BudgetTracker, count_tokens
 from .config import ContextConfig
 from .items import AttentionPosition, ContextItem, ItemType, LoadState
-from .masking import ACT_COMPRESS, ACT_EVICT, ACT_MASK, ACT_OFFLOAD, \
-    Decision, MaskResult, StepLevelUnloader
+from .masking import (
+    ACT_COMPRESS,
+    ACT_EVICT,
+    ACT_MASK,
+    ACT_OFFLOAD,
+    Decision,
+    MaskResult,
+    StepLevelUnloader,
+)
 from .recall import RecallEngine, RecallResult
 from .scoring import Scorer, SimilarityFn
 from .store import ExternalStore, get_store
@@ -35,11 +42,11 @@ class BuildResult:
     prompt: str                      # 组装好的上下文文本
     used_tokens: int
     max_tokens: int
-    omitted: List[dict] = field(default_factory=list)    # 未加载（只在索引里）
-    masked: List[dict] = field(default_factory=list)     # 被 masking 的项
-    decisions: List[Decision] = field(default_factory=list)
-    recall: Optional[RecallResult] = None
-    reasons: List[str] = field(default_factory=list)
+    omitted: list[dict] = field(default_factory=list)    # 未加载（只在索引里）
+    masked: list[dict] = field(default_factory=list)     # 被 masking 的项
+    decisions: list[Decision] = field(default_factory=list)
+    recall: RecallResult | None = None
+    reasons: list[str] = field(default_factory=list)
 
     @property
     def usage_ratio(self) -> float:
@@ -51,9 +58,9 @@ class CompressResult:
     reason: str                      # budget / turn_end / manual / long_loop
     before_tokens: int
     after_tokens: int
-    offloaded: List[str] = field(default_factory=list)
-    folded: Optional[str] = None     # 长循环折叠摘要的引用
-    decisions: List[Decision] = field(default_factory=list)
+    offloaded: list[str] = field(default_factory=list)
+    folded: str | None = None     # 长循环折叠摘要的引用
+    decisions: list[Decision] = field(default_factory=list)
 
     @property
     def saved(self) -> int:
@@ -63,11 +70,11 @@ class CompressResult:
 class ContextManager:
     """可插拔上下文管理器。embed_fn / summarizer / store 均可注入。"""
 
-    def __init__(self, cfg: Optional[ContextConfig] = None,
-                 embed_fn: Optional[Callable[[str], Optional[List[float]]]] = None,
-                 similarity_fn: Optional[SimilarityFn] = None,
-                 store: Optional[ExternalStore] = None,
-                 summarizer: Optional[Callable[[str], str]] = None) -> None:
+    def __init__(self, cfg: ContextConfig | None = None,
+                 embed_fn: Callable[[str], list[float] | None] | None = None,
+                 similarity_fn: SimilarityFn | None = None,
+                 store: ExternalStore | None = None,
+                 summarizer: Callable[[str], str] | None = None) -> None:
         self.cfg = cfg or ContextConfig()
         self.cfg.validate()
         self.store = store or get_store(self.cfg.external_store)
@@ -80,14 +87,14 @@ class ContextManager:
             trigger_ratio=self.cfg.compress_trigger_ratio,
             target_ratio=self.cfg.compress_target_ratio)
         self.summarizer = summarizer          # 注入后 turn 级可用 LLM 摘要
-        self.items: Dict[str, ContextItem] = {}
+        self.items: dict[str, ContextItem] = {}
         self.current_step = 0
         self.turn_steps = 0                   # 本 turn 累计 step 数
         self.pending_obs: set = set()         # 当前 step 刚产生未消费的 Observation
         self.unfinished_actions: set = set()  # 未完成 Action 依赖的 step
         self.session_query = ""               # 本 turn 的任务文本（相似性基准）
         self.topic_switched = False
-        self._decisions: List[Decision] = []  # 累计可解释记录
+        self._decisions: list[Decision] = []  # 累计可解释记录
 
     # ─────────────────────────── 注册 / 加载 ───────────────────────────
 
@@ -104,7 +111,7 @@ class ContextManager:
         self.items[item.id] = item
         return item
 
-    def load(self, item_id: str, step: Optional[int] = None) -> Optional[str]:
+    def load(self, item_id: str, step: int | None = None) -> str | None:
         """按标识加载完整内容；返回正文或 None。"""
         it = self.items.get(item_id)
         if it is None:
@@ -121,7 +128,7 @@ class ContextManager:
         self._recalc_budget()
         return it.content
 
-    def load_by_ref(self, ref: str) -> Optional[str]:
+    def load_by_ref(self, ref: str) -> str | None:
         """按外部引用恢复内容（卸载后可回查）。"""
         return self.store.get(ref)
 
@@ -202,7 +209,7 @@ class ContextManager:
         # turn 内主动卸载（先卸后召回，防刚召回又被卸；召回 load 会续租）
         self._proactive_prune(step)
         self._embed_unloaded()   # 召回前补算（知识项注册后首次可用）
-        recall_res: Optional[RecallResult] = None
+        recall_res: RecallResult | None = None
         if query and not build_only:
             recall_res = self.load_by_trigger(query)
 
@@ -210,11 +217,11 @@ class ContextManager:
         self.pending_obs.clear()
 
         # 组装：HEAD(系统/约束/原始请求) → MIDDLE(历史/知识，按态) → TAIL(当前任务)
-        head: List[str] = []
-        middle: List[str] = []
-        tail: List[str] = []
-        omitted: List[dict] = []
-        masked: List[dict] = []
+        head: list[str] = []
+        middle: list[str] = []
+        tail: list[str] = []
+        omitted: list[dict] = []
+        masked: list[dict] = []
         used = 0
         for it in self._sorted_items():
             if it.state == LoadState.INDEX_ONLY:
@@ -258,8 +265,8 @@ class ContextManager:
 
     def on_observation(self, obs_id: str, content: str, tool: str = "",
                        params_summary: str = "", one_line: str = "",
-                       step: Optional[int] = None,
-                       depends_on_action_step: Optional[int] = None,
+                       step: int | None = None,
+                       depends_on_action_step: int | None = None,
                        persisted: bool = False) -> BuildResult:
         """Observation 后钩子：登记、更新预算、判定 masking（只在 step 间）。"""
         step = self.current_step if step is None else step
@@ -312,7 +319,7 @@ class ContextManager:
             decisions=list(mask_res.decisions),
             reasons=[str(d) for d in mask_res.decisions])
 
-    def on_turn_end(self, step_count: Optional[int] = None,
+    def on_turn_end(self, step_count: int | None = None,
                     force: bool = False) -> CompressResult:
         """turn 后钩子：重量级卸载/压缩。全量淘汰决策只能在这里发生。"""
         steps = step_count if step_count is not None else self.turn_steps
@@ -322,8 +329,8 @@ class ContextManager:
             reason = "budget" if self.budget.over_trigger else "manual"
 
         # —— 长循环收尾：step 数超阈值 → 折叠成结构化摘要 ——
-        folded_ref: Optional[str] = None
-        decisions: List[Decision] = []
+        folded_ref: str | None = None
+        decisions: list[Decision] = []
         if steps > self.cfg.turn_compress_min_steps:
             folded_ref = self._fold_trajectory()
             reason = "long_loop" if reason == "turn_end" else reason
@@ -358,7 +365,7 @@ class ContextManager:
 
     # ─────────────────────────── 内部 ───────────────────────────
 
-    def _sorted_items(self) -> List[ContextItem]:
+    def _sorted_items(self) -> list[ContextItem]:
         att_order = {AttentionPosition.HEAD: 0,
                      AttentionPosition.MIDDLE: 1, AttentionPosition.TAIL: 2}
         return sorted(self.items.values(),
@@ -383,9 +390,9 @@ class ContextManager:
             it.recoverable = True
             it.content = ""          # 索引态不保留正文（规范 §三）
 
-    def _compress(self, reason: str) -> List[Decision]:
+    def _compress(self, reason: str) -> list[Decision]:
         """分层降级卸载：只处理非保护的中段已加载项，逐级降级。"""
-        decisions: List[Decision] = []
+        decisions: list[Decision] = []
         if self.budget.used <= self.budget.target_tokens and reason != "manual":
             return decisions
         # 候选：非保护、已加载，按创建时间从旧到新
@@ -472,7 +479,7 @@ class ContextManager:
         """
         n = 0
         # ① 去重（同 tool+params，只留最新）
-        groups: Dict[tuple, List[ContextItem]] = {}
+        groups: dict[tuple, list[ContextItem]] = {}
         for it in self.items.values():
             if (it.type != ItemType.OBSERVATION or it.state != LoadState.LOADED
                     or it.is_protected):
@@ -568,6 +575,6 @@ class ContextManager:
         self._recalc_budget()
         return ref
 
-    def decisions_log(self) -> List[str]:
+    def decisions_log(self) -> list[str]:
         """全部可解释记录（项/类型/原因/评分）。"""
         return [str(d) for d in self._decisions]

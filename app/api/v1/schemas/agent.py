@@ -1,27 +1,28 @@
 """Agent Schema"""
 
-from typing import Optional, Dict, Any
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
 class AgentExecuteRequest(BaseModel):
     """Agent 执行请求"""
     task: str = Field(..., description="要执行的任务")
-    session_id: Optional[str] = Field(None, description="会话 ID")
-    strategy: Optional[str] = Field(None, description="LLM 路由策略")
-    context: Optional[Dict[str, Any]] = Field(None, description="额外上下文")
-    task_path: Optional[str] = Field(None, description="任务文件存储路径")
+    session_id: str | None = Field(None, description="会话 ID")
+    strategy: str | None = Field(None, description="LLM 路由策略")
+    context: dict[str, Any] | None = Field(None, description="额外上下文")
+    task_path: str | None = Field(None, description="任务文件存储路径")
 
 
 class AgentExecuteResponse(BaseModel):
     """Agent 执行响应"""
     success: bool
     task_id: str
-    result: Optional[Dict[str, Any]] = None
-    intent: Optional[str] = None
-    warning: Optional[str] = None
-    error: Optional[str] = None
-    execution_time: Optional[float] = None
+    result: dict[str, Any] | None = None
+    intent: str | None = None
+    warning: str | None = None
+    error: str | None = None
+    execution_time: float | None = None
 
 
 class BudgetStatusResponse(BaseModel):

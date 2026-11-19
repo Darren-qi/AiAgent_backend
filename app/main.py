@@ -4,36 +4,36 @@ FastAPI 应用入口模块
 定义 FastAPI 应用实例，配置中间件、路由和生命周期事件。
 """
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.core.config import get_settings
-from app.core.exceptions import AppException
-from app.db.session import init_db, close_db
+from app.agent.skills.core.progressive_loader import bootstrap as bootstrap_skills
 from app.api.v1.endpoints import (
     agent_router,
-    storage_router,
-    social_router,
-    notification_router,
+    auth_router,
     budget_router,
     health_router,
-    auth_router,
-    websocket_router,
-    users_router,
+    notification_router,
     posts_router,
+    social_router,
+    storage_router,
+    users_router,
+    websocket_router,
 )
+from app.core.config import get_settings
+from app.core.exceptions import AppException
+from app.db.session import close_db, init_db
 from app.middleware.request_id import (
     RequestIDMiddleware,
-    RequestTimingMiddleware,
     RequestLoggingMiddleware,
+    RequestTimingMiddleware,
 )
-from app.utils.logger import setup_logger, log_info, log_error
-from app.agent.skills.core.progressive_loader import bootstrap as bootstrap_skills
+from app.utils.logger import log_error, log_info, setup_logger
 
 
 @asynccontextmanager

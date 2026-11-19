@@ -1,16 +1,16 @@
 """安全子图"""
 
-from typing import Dict, Any, List, Optional
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
 class SafetyCheckResult:
     """安全检查结果"""
     passed: bool
-    violations: List[str]
-    warnings: List[str]
+    violations: list[str]
+    warnings: list[str]
 
 
 class SafetyGraph:
@@ -38,8 +38,8 @@ class SafetyGraph:
     async def check(
         self,
         task: str,
-        params: Optional[Dict[str, Any]] = None,
-        planned_skills: Optional[List[str]] = None
+        params: dict[str, Any] | None = None,
+        planned_skills: list[str] | None = None
     ) -> SafetyCheckResult:
         """
         执行全面安全检查
@@ -75,7 +75,7 @@ class SafetyGraph:
             warnings=warnings,
         )
 
-    def _check_input(self, task: str) -> Dict[str, Any]:
+    def _check_input(self, task: str) -> dict[str, Any]:
         """检查输入内容"""
         violations = []
         warnings = []
@@ -101,7 +101,7 @@ class SafetyGraph:
 
         return {"violations": violations, "warnings": warnings}
 
-    def _check_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _check_params(self, params: dict[str, Any]) -> dict[str, Any]:
         """检查执行参数"""
         violations = []
         warnings = []
@@ -121,7 +121,7 @@ class SafetyGraph:
 
         return {"violations": violations, "warnings": warnings}
 
-    def _check_skills(self, skills: List[str]) -> Dict[str, Any]:
+    def _check_skills(self, skills: list[str]) -> dict[str, Any]:
         """检查 Skill 调用"""
         violations = []
         warnings = []

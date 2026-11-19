@@ -1,15 +1,15 @@
 """Middleware: CORS middleware."""
 
+
 from fastapi.middleware.cors import CORSMiddleware as FastAPICORSMiddleware
-from typing import List
 
 
 def setup_cors_middleware(
     app,
-    allow_origins: List[str] = None,
+    allow_origins: list[str] = None,
     allow_credentials: bool = True,
-    allow_methods: List[str] = None,
-    allow_headers: List[str] = None,
+    allow_methods: list[str] = None,
+    allow_headers: list[str] = None,
 ) -> None:
     """配置 CORS 中间件"""
     if allow_origins is None:

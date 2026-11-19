@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """Notification 端点"""
 
-from typing import List
+
 from fastapi import APIRouter
 
+from app.agent.tools.notification.manager import NotificationManager
 from app.api.deps import CurrentUser
 from app.api.v1.schemas.notification import NotificationSendRequest, NotificationSendResponse
-from app.agent.tools.notification.manager import NotificationManager
 
 router = APIRouter()
 notification_manager = NotificationManager()
@@ -41,7 +41,7 @@ async def send_notification(
 
 @router.post("/broadcast")
 async def broadcast_notification(
-    channels: List[str],
+    channels: list[str],
     recipients: dict,
     subject: str,
     content: str,
@@ -62,7 +62,7 @@ async def send_scheduled_notification(
     task_name: str,
     status: str,
     result: str,
-    channels: List[str],
+    channels: list[str],
     user: CurrentUser = None,
 ) -> dict:
     """发送定时任务通知"""

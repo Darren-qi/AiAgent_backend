@@ -1,8 +1,8 @@
 """企业微信客户端"""
 
 import os
+
 import httpx
-from typing import Optional
 
 
 class WeComClient:
@@ -12,7 +12,7 @@ class WeComClient:
         self.corp_id = os.environ.get("WECOM_CORP_ID", "")
         self.corp_secret = os.environ.get("WECOM_CORP_SECRET", "")
         self.agent_id = os.environ.get("WECOM_AGENT_ID", "")
-        self._access_token: Optional[str] = None
+        self._access_token: str | None = None
 
     async def _get_access_token(self) -> str:
         """获取访问令牌"""

@@ -2,9 +2,9 @@
 
 import asyncio
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Any
 
-from app.agent.agents.base import BaseAgent, AgentType, AgentResult
+from app.agent.agents.base import AgentResult, AgentType, BaseAgent
 from app.agent.skills.core.progressive_loader import get_loader
 
 logger = logging.getLogger(__name__)
@@ -29,9 +29,9 @@ class ExecutorAgent(BaseAgent):
 
     async def run(
         self,
-        subtasks: List[Dict[str, Any]],
+        subtasks: list[dict[str, Any]],
         mode: str = "sequential",
-        context: Optional[Dict[str, Any]] = None
+        context: dict[str, Any] | None = None
     ) -> AgentResult:
         """
         执行子任务列表
@@ -69,8 +69,8 @@ class ExecutorAgent(BaseAgent):
 
     async def _execute_sequential(
         self,
-        subtasks: List[Dict[str, Any]],
-        context: Dict[str, Any]
+        subtasks: list[dict[str, Any]],
+        context: dict[str, Any]
     ) -> tuple:
         """串行执行"""
         results = []
@@ -108,8 +108,8 @@ class ExecutorAgent(BaseAgent):
 
     async def _execute_parallel(
         self,
-        subtasks: List[Dict[str, Any]],
-        context: Dict[str, Any]
+        subtasks: list[dict[str, Any]],
+        context: dict[str, Any]
     ) -> tuple:
         """并行执行"""
         # 分离有依赖和无依赖的任务
@@ -171,9 +171,9 @@ class ExecutorAgent(BaseAgent):
 
     async def _execute_single(
         self,
-        subtask: Dict[str, Any],
-        params: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        subtask: dict[str, Any],
+        params: dict[str, Any]
+    ) -> dict[str, Any]:
         """执行单个子任务"""
         skill_name = subtask.get("skill", "general_response")
 
@@ -203,7 +203,7 @@ class ExecutorAgent(BaseAgent):
             logger.error(f"[ExecutorAgent] 执行 Skill '{skill_name}' 失败: {e}")
             return {"success": False, "error": str(e)}
 
-    async def _fallback_to_llm(self, subtask: Dict[str, Any]) -> Dict[str, Any]:
+    async def _fallback_to_llm(self, subtask: dict[str, Any]) -> dict[str, Any]:
         """当没有对应 Skill 时，使用 LLM 作为后备"""
         description = subtask.get("description", "")
         prompt = f"请完成以下任务：{description}\n\n如果需要代码请提供可运行的代码示例。"
@@ -218,7 +218,7 @@ class ExecutorAgent(BaseAgent):
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def _inject_dependencies(self, params: Dict[str, Any], shared_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _inject_dependencies(self, params: dict[str, Any], shared_data: dict[str, Any]) -> dict[str, Any]:
         """注入依赖数据到参数中"""
         # 支持通过 ${task_1} 引用前面任务的结果
         for key, value in params.items():

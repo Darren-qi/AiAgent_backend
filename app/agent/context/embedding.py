@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import List, Optional, Sequence
+from collections.abc import Sequence
 
 import httpx
 
@@ -37,15 +37,15 @@ class EmbeddingError(RuntimeError):
 class ZhipuEmbedder:
     """智谱 embedding-3 同步客户端：批量 64/次、429与5xx 重试、2048 维校验。"""
 
-    def __init__(self, api_key: Optional[str] = None, *,
-                 base_url: Optional[str] = None,
+    def __init__(self, api_key: str | None = None, *,
+                 base_url: str | None = None,
                  model: str = DEFAULT_MODEL,
                  dimension: int = DEFAULT_DIMENSION,
                  batch_size: int = DEFAULT_BATCH_SIZE,
                  timeout: float = 60.0,
                  max_retries: int = 3,
                  backoff: float = 0.1,
-                 transport: Optional[httpx.BaseTransport] = None) -> None:
+                 transport: httpx.BaseTransport | None = None) -> None:
         self.api_key = api_key if api_key is not None else os.environ.get("ZHIPU_API_KEY", "")
         # 独立环境变量，避免与聊天用 ZHIPU_BASE_URL（无 /api/paas/v4 后缀）冲突
         self.base_url = (base_url or os.environ.get("ZHIPU_EMBED_BASE_URL")
@@ -60,19 +60,19 @@ class ZhipuEmbedder:
 
     # —— 公开接口 ——
 
-    def embed(self, texts: Sequence[str]) -> List[List[float]]:
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """批量 embedding（顺序与输入一致）。失败抛 EmbeddingError。"""
         if not texts:
             return []
         if not self.api_key:
             raise EmbeddingError("ZHIPU_API_KEY 未配置")
-        vectors: List[List[float]] = []
+        vectors: list[list[float]] = []
         for start in range(0, len(texts), self.batch_size):
             batch = list(texts[start:start + self.batch_size])
             vectors.extend(self._embed_batch(batch))
         return vectors
 
-    def embed_one(self, text: str) -> Optional[List[float]]:
+    def embed_one(self, text: str) -> list[float] | None:
         """EmbedFn 插拔位：单条 embedding；任何失败返回 None（跳过向量层）。"""
         if not text or not self.api_key:
             return None
@@ -92,7 +92,7 @@ class ZhipuEmbedder:
     def _retryable(status: int) -> bool:
         return status == 429 or status >= 500
 
-    def _embed_batch(self, batch: List[str]) -> List[List[float]]:
+    def _embed_batch(self, batch: list[str]) -> list[list[float]]:
         url = f"{self.base_url}/embeddings"
         payload = {"model": self.model, "input": batch}
         last_err = "unknown"

@@ -1,8 +1,8 @@
 """统一状态管理模块"""
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
 from enum import Enum
+from typing import Any
 
 
 class ExecutionStatus(str, Enum):
@@ -44,20 +44,20 @@ class ExecutionContext:
     # 步骤跟踪
     total_steps: int = 0                 # 总步骤数
     completed_steps: int = 0             # 已完成步骤数
-    failed_steps: List[int] = field(default_factory=list)  # 失败的步骤索引
+    failed_steps: list[int] = field(default_factory=list)  # 失败的步骤索引
 
     # 计划历史 (用于循环检测)
-    plan_history: List[List[Dict[str, Any]]] = field(default_factory=list)  # 历史计划
-    result_history: List[Dict[str, Any]] = field(default_factory=list)  # 历史结果
+    plan_history: list[list[dict[str, Any]]] = field(default_factory=list)  # 历史计划
+    result_history: list[dict[str, Any]] = field(default_factory=list)  # 历史结果
 
     # 替代方案
-    alternate_plans: List[List[Dict[str, Any]]] = field(default_factory=list)  # 替代计划历史
+    alternate_plans: list[list[dict[str, Any]]] = field(default_factory=list)  # 替代计划历史
     recovery_attempts: int = 0            # 恢复尝试次数
 
     # 执行配置
     parallel_enabled: bool = True         # 是否启用并行执行
     force_single_step: bool = False      # 强制单步执行（用于调试）
-    task_path: Optional[str] = None     # 任务文件存储路径 (AiAgent/tasks/项目名_时间戳/)
+    task_path: str | None = None     # 任务文件存储路径 (AiAgent/tasks/项目名_时间戳/)
 
     # 超时配置 (单位: 秒)
     default_step_timeout: int = 300      # 默认单步超时: 5分钟 (原60秒)
@@ -66,10 +66,10 @@ class ExecutionContext:
 
     # 状态
     status: ExecutionStatus = ExecutionStatus.PENDING
-    last_error: Optional[str] = None     # 最后一次错误信息
-    termination_reason: Optional[str] = None  # 终止原因
+    last_error: str | None = None     # 最后一次错误信息
+    termination_reason: str | None = None  # 终止原因
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
         return {
             "iteration": self.iteration,
@@ -96,11 +96,11 @@ class ExecutionContext:
         """是否可以继续迭代"""
         return self.iteration < self.max_iterations
 
-    def record_plan(self, plan: List[Dict[str, Any]]) -> None:
+    def record_plan(self, plan: list[dict[str, Any]]) -> None:
         """记录计划到历史"""
         self.plan_history.append(plan)
 
-    def record_result(self, result: Dict[str, Any]) -> None:
+    def record_result(self, result: dict[str, Any]) -> None:
         """记录结果到历史"""
         self.result_history.append(result)
 
@@ -134,8 +134,8 @@ class ObservationResult:
     should_continue: bool = True
     should_replan: bool = False
     should_terminate: bool = False
-    termination_reason: Optional[str] = None
-    fallback_action: Optional[str] = None  # terminate时的兜底动作
+    termination_reason: str | None = None
+    fallback_action: str | None = None  # terminate时的兜底动作
     message: str = ""
 
 
@@ -154,7 +154,7 @@ class LoopDetector:
     def detect(
         self,
         context: ExecutionContext,
-        current_plan: List[Dict[str, Any]]
+        current_plan: list[dict[str, Any]]
     ) -> ObservationResult:
         """
         检测是否为死循环场景
@@ -210,8 +210,8 @@ class LoopDetector:
 
     def _detect_exact_loop(
         self,
-        plan_history: List[List[Dict[str, Any]]],
-        current_plan: List[Dict[str, Any]]
+        plan_history: list[list[dict[str, Any]]],
+        current_plan: list[dict[str, Any]]
     ) -> bool:
         """检测精确循环: 相同计划执行超过阈值"""
         if len(plan_history) < self.exact_loop_threshold:
@@ -228,7 +228,7 @@ class LoopDetector:
 
     def _detect_oscillation(
         self,
-        plan_history: List[List[Dict[str, Any]]]
+        plan_history: list[list[dict[str, Any]]]
     ) -> bool:
         """
         检测振荡: 两个计划交替执行
@@ -276,7 +276,7 @@ class LoopDetector:
 
     def _detect_no_progress(
         self,
-        result_history: List[Dict[str, Any]]
+        result_history: list[dict[str, Any]]
     ) -> bool:
         """
         检测无进展: 连续多次迭代结果完全相同
@@ -300,8 +300,8 @@ class LoopDetector:
 
     def _plans_equal(
         self,
-        plan1: List[Dict[str, Any]],
-        plan2: List[Dict[str, Any]]
+        plan1: list[dict[str, Any]],
+        plan2: list[dict[str, Any]]
     ) -> bool:
         """比较两个计划是否相同"""
         if len(plan1) != len(plan2):
@@ -318,8 +318,8 @@ class LoopDetector:
 
     def _find_plan_index(
         self,
-        plan: List[Dict[str, Any]],
-        plan_history: List[List[Dict[str, Any]]]
+        plan: list[dict[str, Any]],
+        plan_history: list[list[dict[str, Any]]]
     ) -> int:
         """查找计划在历史中的索引"""
         for i, historical in enumerate(plan_history):
@@ -327,7 +327,7 @@ class LoopDetector:
                 return i
         return -1
 
-    def _normalize_result_data(self, result: Dict[str, Any]) -> str:
+    def _normalize_result_data(self, result: dict[str, Any]) -> str:
         """标准化结果数据用于比较"""
         data = result.get("data") or result.get("result", {}).get("data")
         if data is None:
@@ -342,7 +342,7 @@ class LoopDetector:
         except:
             return str(data)
 
-    def _plan_summary(self, plan: List[Dict[str, Any]]) -> str:
+    def _plan_summary(self, plan: list[dict[str, Any]]) -> str:
         """生成计划摘要"""
         actions = [step.get("action", "unknown") for step in plan]
         return " -> ".join(actions)

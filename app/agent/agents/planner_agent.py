@@ -1,11 +1,11 @@
 """规划 Agent"""
 
 import json
-import re
 import logging
-from typing import Dict, Any, Optional
+import re
+from typing import Any
 
-from app.agent.agents.base import BaseAgent, AgentType, AgentResult
+from app.agent.agents.base import AgentResult, AgentType, BaseAgent
 from app.agent.skills import get_loader
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ class PlannerAgent(BaseAgent):
     "reasoning": "规划理由"
 }"""
 
-    async def run(self, task: str, context: Optional[Dict[str, Any]] = None) -> AgentResult:
+    async def run(self, task: str, context: dict[str, Any] | None = None) -> AgentResult:
         """执行任务规划"""
         logger.info(f"[PlannerAgent] 开始规划任务: {task[:80]}...")
         context = context or {}
@@ -112,7 +112,7 @@ class PlannerAgent(BaseAgent):
             lines.append(f"- {schema['name']}: {schema['description']} | 参数: {params_str}")
         return "\n".join(lines)
 
-    def _parse_plan(self, response: str) -> Optional[Dict[str, Any]]:
+    def _parse_plan(self, response: str) -> dict[str, Any] | None:
         """解析规划结果"""
         try:
             # 尝试提取 JSON

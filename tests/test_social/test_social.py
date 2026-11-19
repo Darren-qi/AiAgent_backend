@@ -1,6 +1,7 @@
 """Social 模块测试"""
 
 import pytest
+
 from app.agent.tools.social.manager import SocialManager
 
 

@@ -1,14 +1,14 @@
 """平衡策略"""
 
-from typing import List, Optional
-from app.agent.llm.types import ModelConfig
+
 from app.agent.llm.routers.base import BaseRouter
+from app.agent.llm.types import ModelConfig
 
 
 class BalanceStrategy(BaseRouter):
     """平衡策略 - 在成本和质量之间取得平衡"""
 
-    def select(self, available_models: List[ModelConfig]) -> Optional[ModelConfig]:
+    def select(self, available_models: list[ModelConfig]) -> ModelConfig | None:
         """选择性价比最高的模型"""
         if not available_models:
             return None

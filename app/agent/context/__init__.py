@@ -2,16 +2,14 @@
 
 规则与配置见 README_CONTEXT.md；方案比对文件见项目根 CONTEXT_MANAGER_PLAN.md。
 """
-from .budget import (BudgetTracker, calibrate, calibration_ratio,
-                     count_tokens, reset_calibration)
+from .budget import BudgetTracker, calibrate, calibration_ratio, count_tokens, reset_calibration
 from .config import ContextConfig, RecallConfig
 from .embedding import EmbeddingError, ZhipuEmbedder
-from .items import (AttentionPosition, ContextItem, ItemType, LoadState,
-                    PROTECTED_TYPES)
+from .items import PROTECTED_TYPES, AttentionPosition, ContextItem, ItemType, LoadState
 from .manager import BuildResult, CompressResult, ContextManager
 from .masking import Decision, MaskResult, StepLevelUnloader
 from .recall import RecallEngine, RecallResult
-from .scoring import Scorer, ScoreBreakdown, cosine
+from .scoring import ScoreBreakdown, Scorer, cosine
 from .store import ExternalStore, MemoryStore, get_store, register_store
 
 __all__ = [

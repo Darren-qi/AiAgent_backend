@@ -1,10 +1,10 @@
 """经验存储器"""
 
 import logging
-from typing import Dict, Any, List, Optional
 from datetime import datetime
+from typing import Any
 
-from app.agent.experience.base import Experience, BaseExperienceStore
+from app.agent.experience.base import BaseExperienceStore, Experience
 
 logger = logging.getLogger(__name__)
 
@@ -17,19 +17,19 @@ class ExperienceSaver:
     支持自动分析和提取经验元信息。
     """
 
-    def __init__(self, store: Optional[BaseExperienceStore] = None):
+    def __init__(self, store: BaseExperienceStore | None = None):
         self._store = store
-        self._pending_queue: List[Dict[str, Any]] = []
+        self._pending_queue: list[dict[str, Any]] = []
 
     async def save(
         self,
         task: str,
         task_type: str,
-        plan: List[Dict[str, Any]],
-        results: List[Dict[str, Any]],
+        plan: list[dict[str, Any]],
+        results: list[dict[str, Any]],
         success: bool,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> Optional[str]:
+        metadata: dict[str, Any] | None = None
+    ) -> str | None:
         """
         保存执行经验
 
@@ -89,8 +89,8 @@ class ExperienceSaver:
     def _generate_description(
         self,
         task: str,
-        plan: List[Dict],
-        results: List[Dict]
+        plan: list[dict],
+        results: list[dict]
     ) -> str:
         """生成经验描述"""
         action_count = len(plan)
@@ -106,7 +106,7 @@ class ExperienceSaver:
                f"执行步骤: {' -> '.join(steps_summary)}\n" \
                f"成功率: {success_count}/{action_count}"
 
-    def _extract_solution(self, results: List[Dict]) -> str:
+    def _extract_solution(self, results: list[dict]) -> str:
         """从结果中提取解决方案摘要"""
         solutions = []
 
@@ -130,7 +130,7 @@ class ExperienceSaver:
         content = f"{task_type}:{task[:100]}:{datetime.now().isoformat()}"
         return hashlib.md5(content.encode()).hexdigest()[:16]
 
-    def _experience_to_dict(self, exp: Experience) -> Dict[str, Any]:
+    def _experience_to_dict(self, exp: Experience) -> dict[str, Any]:
         """将经验对象转为字典"""
         return {
             "id": exp.id,
@@ -147,8 +147,8 @@ class ExperienceSaver:
 
     async def batch_save(
         self,
-        experiences: List[Dict[str, Any]]
-    ) -> List[Optional[str]]:
+        experiences: list[dict[str, Any]]
+    ) -> list[str | None]:
         """批量保存经验"""
         results = []
         for exp_data in experiences:
@@ -172,7 +172,7 @@ class ExperienceSaver:
         """获取待保存经验数量"""
         return len(self._pending_queue)
 
-    def get_pending_experiences(self) -> List[Dict[str, Any]]:
+    def get_pending_experiences(self) -> list[dict[str, Any]]:
         """获取待保存的经验列表"""
         return self._pending_queue.copy()
 
@@ -189,21 +189,21 @@ class MemoryExperienceStore(BaseExperienceStore):
     """
 
     def __init__(self):
-        self._experiences: Dict[str, Experience] = {}
+        self._experiences: dict[str, Experience] = {}
 
     async def save(self, experience: Experience) -> str:
         self._experiences[experience.id] = experience
         return experience.id
 
-    async def get(self, exp_id: str) -> Optional[Experience]:
+    async def get(self, exp_id: str) -> Experience | None:
         return self._experiences.get(exp_id)
 
     async def search(
         self,
         query: str,
-        task_type: Optional[str] = None,
+        task_type: str | None = None,
         top_k: int = 5
-    ) -> List[Experience]:
+    ) -> list[Experience]:
         results = []
 
         for exp in self._experiences.values():
@@ -235,7 +235,7 @@ class MemoryExperienceStore(BaseExperienceStore):
         if exp:
             exp.success_count += 1
 
-    def get_all(self) -> List[Experience]:
+    def get_all(self) -> list[Experience]:
         return list(self._experiences.values())
 
     def count(self) -> int:

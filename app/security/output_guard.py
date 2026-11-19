@@ -1,7 +1,6 @@
 """输出安全检查"""
 
 import re
-from typing import Optional
 
 
 class OutputGuard:
@@ -17,7 +16,7 @@ class OutputGuard:
             r"ak-[\w]+",
         ]
 
-    def check(self, content: str) -> tuple[bool, Optional[str]]:
+    def check(self, content: str) -> tuple[bool, str | None]:
         """
         检查输出内容是否包含敏感信息
 

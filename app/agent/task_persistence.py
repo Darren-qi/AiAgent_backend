@@ -17,12 +17,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Set
 
 logger = logging.getLogger(__name__)
 
 # 保持 fire-and-forget 协程的引用，避免被 GC 掉（"Task was destroyed"）
-_pending: Set[asyncio.Task] = set()
+_pending: set[asyncio.Task] = set()
 
 
 async def persist_task_status(task_id: str, status: str, error: str = "") -> None:

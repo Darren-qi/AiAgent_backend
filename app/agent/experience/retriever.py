@@ -1,9 +1,9 @@
 """经验检索器"""
 
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Any
 
-from app.agent.experience.base import Experience, BaseExperienceStore
+from app.agent.experience.base import BaseExperienceStore, Experience
 from app.agent.llm.factory import LLMFactory
 
 logger = logging.getLogger(__name__)
@@ -17,9 +17,9 @@ class ExperienceRetriever:
     支持多种检索策略：向量检索、关键词检索、混合检索。
     """
 
-    def __init__(self, store: Optional[BaseExperienceStore] = None):
+    def __init__(self, store: BaseExperienceStore | None = None):
         self._store = store
-        self._llm_factory: Optional[LLMFactory] = None
+        self._llm_factory: LLMFactory | None = None
 
     @property
     def llm_factory(self) -> LLMFactory:
@@ -30,10 +30,10 @@ class ExperienceRetriever:
     async def retrieve(
         self,
         task: str,
-        task_type: Optional[str] = None,
+        task_type: str | None = None,
         top_k: int = 3,
         strategy: str = "hybrid"
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         检索相似经验
 
@@ -65,9 +65,9 @@ class ExperienceRetriever:
     async def _vector_search(
         self,
         task: str,
-        task_type: Optional[str],
+        task_type: str | None,
         top_k: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         向量相似度检索
 
@@ -105,9 +105,9 @@ class ExperienceRetriever:
     async def _keyword_search(
         self,
         task: str,
-        task_type: Optional[str],
+        task_type: str | None,
         top_k: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """关键词检索（基于 BM25 的简化实现）"""
         try:
             if self._store:
@@ -136,12 +136,12 @@ class ExperienceRetriever:
 
     def _merge_results(
         self,
-        vector_results: List[Dict],
-        keyword_results: List[Dict],
+        vector_results: list[dict],
+        keyword_results: list[dict],
         top_k: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """RRF 混合排序（Reciprocal Rank Fusion）"""
-        scores: Dict[str, tuple] = {}
+        scores: dict[str, tuple] = {}
 
         # 向量检索得分 (RRF k=60)
         for i, result in enumerate(vector_results):
@@ -214,8 +214,8 @@ class ExperienceRetriever:
 
     async def _get_all_experiences(
         self,
-        task_type: Optional[str]
-    ) -> List[Experience]:
+        task_type: str | None
+    ) -> list[Experience]:
         """获取所有经验（支持缓存）"""
         if not self._store:
             return []
@@ -234,7 +234,7 @@ class ExperienceRetriever:
         self,
         exp: Experience,
         score: float
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """格式化经验为可读字典"""
         return {
             "id": exp.id,
@@ -253,7 +253,7 @@ class ExperienceRetriever:
         self,
         task: str,
         top_k: int = 2
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         获取与任务相关的执行计划
 

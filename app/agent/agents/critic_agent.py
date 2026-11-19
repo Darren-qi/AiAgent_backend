@@ -2,9 +2,9 @@
 
 import json
 import logging
-from typing import Dict, Any, Optional
+from typing import Any
 
-from app.agent.agents.base import BaseAgent, AgentType, AgentResult
+from app.agent.agents.base import AgentResult, AgentType, BaseAgent
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class CriticAgent(BaseAgent):
         self,
         task: str,
         results: list,
-        context: Optional[Dict[str, Any]] = None
+        context: dict[str, Any] | None = None
     ) -> AgentResult:
         """审查执行结果"""
         logger.info(f"[CriticAgent] 开始审查 {len(results)} 个执行结果")
@@ -107,7 +107,7 @@ class CriticAgent(BaseAgent):
 
         return "\n".join(summary_parts)
 
-    def _parse_evaluation(self, response: str) -> Optional[Dict[str, Any]]:
+    def _parse_evaluation(self, response: str) -> dict[str, Any] | None:
         """解析评估结果"""
         import re
         try:

@@ -6,10 +6,9 @@
 """
 
 from datetime import datetime
-from typing import Any, Dict, Generic, List, Optional, TypeVar
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
-
 
 # =============================================
 # 泛型定义
@@ -85,7 +84,7 @@ class PageResponse(BaseModel, Generic[T]):
 
     model_config = ConfigDict(from_attributes=True)
 
-    items: List[T] = Field(description="数据列表")
+    items: list[T] = Field(description="数据列表")
     meta: PageMeta = Field(description="分页元数据")
 
 
@@ -101,9 +100,9 @@ class ResponseWrapper(BaseModel, Generic[T]):
     """
 
     success: bool = Field(default=True, description="请求是否成功")
-    data: Optional[T] = Field(default=None, description="响应数据")
-    message: Optional[str] = Field(default=None, description="提示信息")
-    error: Optional[str] = Field(default=None, description="错误信息")
+    data: T | None = Field(default=None, description="响应数据")
+    message: str | None = Field(default=None, description="提示信息")
+    error: str | None = Field(default=None, description="错误信息")
 
 
 class SuccessResponse(BaseModel):
@@ -126,8 +125,8 @@ class ErrorResponse(BaseModel):
 
     success: bool = Field(default=False)
     error: str = Field(description="错误信息")
-    error_code: Optional[str] = Field(default=None, description="错误码")
-    details: Optional[Dict[str, Any]] = Field(default=None, description="详细错误信息")
+    error_code: str | None = Field(default=None, description="错误码")
+    details: dict[str, Any] | None = Field(default=None, description="详细错误信息")
 
 
 # =============================================
@@ -151,7 +150,7 @@ class SoftDeleteSchema(BaseModel):
     """包含软删除字段的 Schema"""
     model_config = ConfigDict(from_attributes=True)
 
-    deleted_at: Optional[datetime] = Field(default=None, description="删除时间")
+    deleted_at: datetime | None = Field(default=None, description="删除时间")
 
 
 # =============================================

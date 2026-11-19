@@ -1,9 +1,9 @@
 """社交管理器"""
 
 import os
-from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 
 class SocialProvider(str, Enum):
@@ -18,23 +18,23 @@ class SocialProvider(str, Enum):
 class MessageResult:
     """消息发送结果"""
     success: bool
-    message_id: Optional[str] = None
-    error: Optional[str] = None
+    message_id: str | None = None
+    error: str | None = None
 
 
 class SocialManager:
     """社交平台管理器"""
 
     def __init__(self):
-        self.providers: Dict[str, Any] = {}
+        self.providers: dict[str, Any] = {}
         self._init_providers()
 
     def _init_providers(self) -> None:
         """初始化所有提供商"""
-        from app.agent.tools.social.feishu.client import FeishuClient
-        from app.agent.tools.social.wecom.client import WeComClient
         from app.agent.tools.social.dingtalk.client import DingTalkClient
+        from app.agent.tools.social.feishu.client import FeishuClient
         from app.agent.tools.social.telegram.bot import TelegramBot
+        from app.agent.tools.social.wecom.client import WeComClient
 
         if os.environ.get("FEISHU_APP_ID"):
             self.providers["feishu"] = FeishuClient()

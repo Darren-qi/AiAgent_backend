@@ -6,9 +6,9 @@
 """
 
 import json
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 from app.agent import trace as trace_mod
 from app.agent.llm.factory import LLMFactory
